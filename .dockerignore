@@ -1,0 +1,13 @@
+﻿node_modules
+.env.local
+.git
+.gitignore
+AGENTS.md
+tripo-docs-index.js
+tripo-docs-pages.js
+tripo-generation.js
+tripo-task.js
+tripo-upload-sts.js
+tripo-upload.html
+tripo-upload.js
+README.md

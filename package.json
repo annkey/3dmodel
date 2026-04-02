@@ -1,0 +1,12 @@
+{
+  "name": "tripo3d-web-tool",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A lightweight Tripo3D web app for text/image to 3D generation.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "three": "^0.183.2"
+  }
+}

@@ -1,0 +1,177 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D 模型生成工具</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script
+      type="module"
+      src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"
+    ></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">3D Generation Studio</p>
+          <h1>通过文本和图片生成 3D 模型</h1>
+          <p class="hero-text">
+            这个网站同时接入了 Tripo3D 和 Meshy，支持文本生成与图片生成两种方式。
+            你可以按需切换平台，并查看任务进度、预览图和模型下载链接。
+          </p>
+          <p class="hero-text">
+            另外你也可以打开独立的本地预览页，直接上传 FBX、OBJ、GLB 等模型文件，在网页里旋转查看。
+          </p>
+          <p class="hero-text">
+            <a href="/model-preview.html">打开本地 3D 模型预览页</a>
+          </p>
+        </div>
+        <div class="hero-card">
+          <div class="mini-stat">
+            <span>当前平台</span>
+            <strong id="provider-badge">Tripo3D</strong>
+          </div>
+          <div class="mini-stat">
+            <span>当前模型</span>
+            <strong id="model-version-badge">P1-20260311</strong>
+          </div>
+          <div class="mini-stat">
+            <span>默认能力</span>
+            <strong>Text to 3D / Image to 3D</strong>
+          </div>
+          <div class="mini-stat">
+            <span>运行方式</span>
+            <strong>Node 原生零依赖</strong>
+          </div>
+        </div>
+      </section>
+
+      <main class="grid">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>创建生成任务</h2>
+            <p id="platform-description">选择一种输入方式，提交到 Tripo3D。</p>
+          </div>
+
+          <form id="generator-form" class="generator-form">
+            <div class="mode-switch" role="tablist" aria-label="生成平台">
+              <label class="mode-option provider-option active">
+                <input type="radio" name="provider" value="tripo" checked />
+                <span>Tripo3D</span>
+              </label>
+              <label class="mode-option provider-option">
+                <input type="radio" name="provider" value="meshy" />
+                <span>Meshy</span>
+              </label>
+            </div>
+
+            <div class="mode-switch" role="tablist" aria-label="生成模式">
+              <label class="mode-option active">
+                <input type="radio" name="mode" value="text" checked />
+                <span>文本生成</span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="mode" value="image" />
+                <span>图片生成</span>
+              </label>
+            </div>
+
+            <div id="text-fields" class="field-group">
+              <label class="field">
+                <span>文本提示词</span>
+                <textarea
+                  id="prompt"
+                  name="prompt"
+                  rows="5"
+                  placeholder="例如：一只 Q 版太空猫，穿着橙色宇航服，低多边形风格，干净背景"
+                ></textarea>
+              </label>
+              <label class="field">
+                <span id="secondary-text-label">负向提示词</span>
+                <input
+                  id="negativePrompt"
+                  name="negativePrompt"
+                  type="text"
+                  placeholder="例如：模糊、破损、背景杂乱"
+                />
+              </label>
+            </div>
+
+            <div id="image-fields" class="field-group hidden">
+              <label class="field upload-drop" for="image">
+                <span>参考图片</span>
+                <input id="image" name="image" type="file" accept="image/png,image/jpeg,image/webp" />
+                <strong>点击上传图片</strong>
+                <small id="image-help-text">支持 PNG / JPEG / WEBP，建议分辨率大于 256px</small>
+              </label>
+              <div id="image-preview" class="image-preview hidden"></div>
+            </div>
+
+            <div class="field-row">
+              <label class="field">
+                <span id="model-version-label">模型版本</span>
+                <select id="modelVersion" name="modelVersion"></select>
+              </label>
+              <label class="field">
+                <span id="texture-quality-label">纹理质量</span>
+                <select id="textureQuality" name="textureQuality"></select>
+              </label>
+              <label class="field">
+                <span id="geometry-quality-label">几何质量</span>
+                <select id="geometryQuality" name="geometryQuality"></select>
+              </label>
+            </div>
+
+            <button id="submit-button" class="primary-btn" type="submit">开始生成 3D 模型</button>
+          </form>
+        </section>
+
+        <section class="panel result-panel">
+          <div class="panel-head">
+            <h2>任务结果</h2>
+            <p>提交后自动轮询，直到拿到模型输出。</p>
+          </div>
+
+          <div id="status-card" class="status-card idle">
+            <div>
+              <span class="status-label">当前状态</span>
+              <strong id="status-text">等待提交</strong>
+            </div>
+            <div>
+              <span class="status-label">进度</span>
+              <strong id="progress-text">0%</strong>
+            </div>
+          </div>
+
+          <div class="progress-bar">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+
+          <div id="task-meta" class="task-meta hidden"></div>
+
+          <div id="preview-wrap" class="preview-wrap hidden">
+            <div class="viewer-wrap hidden" id="viewer-wrap">
+              <model-viewer
+                id="model-viewer"
+                camera-controls
+                auto-rotate
+                shadow-intensity="1"
+                exposure="1"
+                interaction-prompt="auto"
+              ></model-viewer>
+            </div>
+            <div class="render-wrap hidden" id="render-wrap">
+              <img id="render-image" alt="渲染预览图" />
+            </div>
+          </div>
+
+          <div id="download-links" class="download-links hidden"></div>
+          <pre id="result-json" class="result-json hidden"></pre>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
