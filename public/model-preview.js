@@ -1,4 +1,4 @@
-import * as THREE from "three";
+﻿import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
@@ -7,6 +7,8 @@ import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { MTLLoader } from "three/addons/loaders/MTLLoader.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+import { KStereoEffect } from "/vendor/kmax/KStereoEffect.js";
+import { WSTrack } from "/vendor/kmax/ws-track.js";
 
 const uploadCard = document.getElementById("upload-card");
 const fileInput = document.getElementById("model-files");
@@ -19,6 +21,7 @@ const resetCameraButton = document.getElementById("reset-camera");
 const autoRotateButton = document.getElementById("toggle-autorotate");
 const wireframeButton = document.getElementById("toggle-wireframe");
 const gridButton = document.getElementById("toggle-grid");
+const stereoButton = document.getElementById("toggle-stereo-3d");
 const fullscreenButton = document.getElementById("toggle-fullscreen");
 const exportButton = document.getElementById("export-image");
 const fileList = document.getElementById("file-list");
@@ -39,11 +42,25 @@ const viewerShell = document.getElementById("viewer-shell");
 const resourceMap = new Map();
 const recentStorageKey = "model-preview-recent";
 
+const stereoConfig = {
+  screenWidth: 0.544,
+  screenHeight: 0.306,
+  screenScale: 1,
+  trackingScale: 1.0
+};
+
 let currentObject = null;
 let animationMixer = null;
 let dragDepth = 0;
 let isWireframe = false;
 let isGridVisible = true;
+let isStereoEnabled = false;
+let isStereoDisplayActive = false;
+let stereoEffect = null;
+let stereoTracker = null;
+let stereoTrackingData = null;
+let stereoBaseCameraPosition = null;
+let stereoBaseTarget = new THREE.Vector3();
 
 const animationClock = new THREE.Clock();
 
@@ -94,47 +111,97 @@ ground.position.y = -0.002;
 ground.receiveShadow = true;
 scene.add(ground);
 
-fileInput.addEventListener("change", (event) => applySelectedFiles(Array.from(event.target.files || [])));
-entryFileSelect.addEventListener("change", () => {
-  highlightSelectedEntry();
-  if (entryFileSelect.value) {
-    void handleLoadModel();
+bootstrap();
+
+function bootstrap() {
+  stereoEffect = new KStereoEffect(renderer);
+  stereoEffect.setSize(window.innerWidth, window.innerHeight);
+  stereoEffect.setViewScale(1);
+  stereoEffect.setCameraFrustum = applyStereoCameraFrustum;
+
+  fileInput.addEventListener("change", (event) => applySelectedFiles(Array.from(event.target.files || [])));
+  entryFileSelect.addEventListener("change", () => {
+    highlightSelectedEntry();
+    if (entryFileSelect.value) {
+      void handleLoadModel();
+    }
+  });
+  themeSelect.addEventListener("change", () => applyTheme(themeSelect.value));
+  lightRange.addEventListener("input", () => updateLightStrength(Number(lightRange.value)));
+  loadButton.addEventListener("click", () => void handleLoadModel());
+  resetCameraButton.addEventListener("click", resetCameraView);
+  autoRotateButton.addEventListener("click", toggleAutoRotate);
+  wireframeButton.addEventListener("click", toggleWireframe);
+  gridButton.addEventListener("click", toggleGrid);
+  stereoButton.addEventListener("click", toggleStereoMode);
+  fullscreenButton.addEventListener("click", () => void toggleFullscreen());
+  exportButton.addEventListener("click", exportPng);
+  document.addEventListener("fullscreenchange", handleFullscreenChange);
+  window.addEventListener("resize", handleResize);
+  window.addEventListener("kmax-module-ready", () => {
+    syncStereoRuntimeParams();
+    updateStereoButton();
+    if (isStereoEnabled) {
+      setStatus("裸眼 3D 引擎已就绪，进入全屏后生效");
+    }
+  });
+  window.addEventListener("error", (event) => {
+    setStatus("脚本错误");
+    modelMeta.textContent = formatPreviewError(event.error || event.message);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    setStatus("加载错误");
+    modelMeta.textContent = formatPreviewError(event.reason);
+  });
+
+  bindDragAndDrop();
+  setupStereoTracking();
+  loadRecentEntries();
+  applyTheme(themeSelect.value);
+  updateLightStrength(Number(lightRange.value || 1.4));
+  handleResize();
+  animate();
+
+  setStatus("准备就绪");
+  modelName.textContent = "尚未加载模型";
+  modelMeta.textContent = "上传本地模型文件后，即可在浏览器中预览。";
+  updateAutoRotateButton();
+  updateWireframeButton();
+  updateGridButton();
+  updateStereoButton();
+  updateFullscreenButton();
+}
+
+function setupStereoTracking() {
+  try {
+    stereoTracker = new WSTrack();
+    stereoTracker.ondata = (data) => {
+      stereoTrackingData = data;
+    };
+
+    stereoTracker.ws?.addEventListener("open", () => {
+      updateStereoButton();
+      if (isStereoEnabled) {
+        setStatus("检测到裸眼 3D 设备服务，进入全屏后将启用立体显示");
+      }
+    });
+
+    stereoTracker.ws?.addEventListener("close", () => {
+      stereoTrackingData = null;
+      if (isStereoDisplayActive) {
+        deactivateStereoDisplay();
+      }
+      updateStereoButton();
+    });
+
+    stereoTracker.ws?.addEventListener("error", () => {
+      updateStereoButton();
+    });
+  } catch {
+    stereoTracker = null;
+    updateStereoButton();
   }
-});
-themeSelect.addEventListener("change", () => applyTheme(themeSelect.value));
-lightRange.addEventListener("input", () => updateLightStrength(Number(lightRange.value)));
-loadButton.addEventListener("click", () => void handleLoadModel());
-resetCameraButton.addEventListener("click", () => {
-  if (!currentObject) return;
-  frameObject(currentObject);
-  setStatus("视角已重置");
-});
-autoRotateButton.addEventListener("click", toggleAutoRotate);
-wireframeButton.addEventListener("click", toggleWireframe);
-gridButton.addEventListener("click", toggleGrid);
-fullscreenButton.addEventListener("click", () => void toggleFullscreen());
-exportButton.addEventListener("click", exportPng);
-document.addEventListener("fullscreenchange", updateFullscreenButton);
-window.addEventListener("resize", handleResize);
-window.addEventListener("error", (event) => {
-  setStatus("脚本错误");
-  modelMeta.textContent = formatPreviewError(event.error || event.message);
-});
-window.addEventListener("unhandledrejection", (event) => {
-  setStatus("加载错误");
-  modelMeta.textContent = formatPreviewError(event.reason);
-});
-
-bindDragAndDrop();
-loadRecentEntries();
-applyTheme(themeSelect.value);
-updateLightStrength(Number(lightRange.value || 1.4));
-handleResize();
-animate();
-
-setStatus("准备就绪");
-modelName.textContent = "尚未加载模型";
-modelMeta.textContent = "上传本地模型文件后，即可在浏览器中预览。";
+}
 
 function bindDragAndDrop() {
   const prevent = (event) => {
@@ -229,6 +296,7 @@ async function handleLoadModel() {
   try {
     await loadModel(entryFile);
     applyWireframeState();
+    captureStereoReferenceCamera();
     setStatus("预览已加载");
   } catch (error) {
     clearCurrentObject();
@@ -246,23 +314,27 @@ async function loadModel(entryFile) {
   const extension = getExtension(entryFile.name);
   const manager = createLoadingManager();
 
-  switch (extension) {
-    case "glb":
-    case "gltf":
-      await loadGltf(entryFile, manager);
-      return;
-    case "fbx":
-      await loadFbx(entryFile, manager);
-      return;
-    case "obj":
-      await loadObj(entryFile, manager);
-      return;
-    case "stl":
-      await loadStl(entryFile);
-      return;
-    default:
-      throw new Error(`当前不支持 .${extension} 格式预览`);
+  if (extension === "glb" || extension === "gltf") {
+    await loadGltf(entryFile, manager);
+    return;
   }
+
+  if (extension === "fbx") {
+    await loadFbx(entryFile, manager);
+    return;
+  }
+
+  if (extension === "obj") {
+    await loadObj(entryFile, manager);
+    return;
+  }
+
+  if (extension === "stl") {
+    await loadStl(entryFile);
+    return;
+  }
+
+  throw new Error(`当前不支持 .${extension} 格式预览`);
 }
 
 async function loadGltf(entryFile, manager) {
@@ -437,7 +509,6 @@ function disposeObject(root) {
     }
 
     const materials = Array.isArray(child.material) ? child.material : [child.material];
-
     for (const material of materials) {
       for (const key of Object.keys(material)) {
         const value = material[key];
@@ -488,6 +559,8 @@ function frameObject(object) {
   controls.maxDistance = Math.max(10, distance * 4);
   controls.target.copy(center);
   controls.update();
+  syncStereoRuntimeParams();
+  captureStereoReferenceCamera();
 }
 
 function updateFileList(files) {
@@ -529,6 +602,12 @@ function highlightSelectedEntry() {
   for (const item of fileList.querySelectorAll("li[data-file]")) {
     item.classList.toggle("selected", item.dataset.file === selected);
   }
+}
+
+function resetCameraView() {
+  if (!currentObject) return;
+  frameObject(currentObject);
+  setStatus("视角已重置");
 }
 
 function isPreviewableModel(fileName) {
@@ -664,15 +743,23 @@ function getObjectSize(object) {
 
 function toggleAutoRotate() {
   controls.autoRotate = !controls.autoRotate;
+  updateAutoRotateButton();
+}
+
+function updateAutoRotateButton() {
   autoRotateButton.classList.toggle("active", controls.autoRotate);
   autoRotateButton.textContent = `自动旋转：${controls.autoRotate ? "开" : "关"}`;
 }
 
 function toggleWireframe() {
   isWireframe = !isWireframe;
+  updateWireframeButton();
+  applyWireframeState();
+}
+
+function updateWireframeButton() {
   wireframeButton.classList.toggle("active", isWireframe);
   wireframeButton.textContent = `线框模式：${isWireframe ? "开" : "关"}`;
-  applyWireframeState();
 }
 
 function applyWireframeState() {
@@ -694,8 +781,39 @@ function toggleGrid() {
   isGridVisible = !isGridVisible;
   grid.visible = isGridVisible;
   ground.visible = isGridVisible;
+  updateGridButton();
+}
+
+function updateGridButton() {
   gridButton.classList.toggle("active", isGridVisible);
   gridButton.textContent = `地面网格：${isGridVisible ? "开" : "关"}`;
+}
+
+function toggleStereoMode() {
+  isStereoEnabled = !isStereoEnabled;
+  captureStereoReferenceCamera();
+  updateStereoButton();
+
+  if (isStereoEnabled) {
+    setStatus("裸眼 3D 已开启，进入全屏后生效");
+  } else {
+    deactivateStereoDisplay();
+    setStatus("裸眼 3D 已关闭");
+  }
+}
+
+function updateStereoButton() {
+  const runtimeReady = Boolean(window.Module?.loaded);
+  const trackerConnected = Boolean(stereoTracker?.ws && stereoTracker.ws.readyState === WebSocket.OPEN);
+  const suffix = isStereoEnabled ? "开" : "关";
+
+  stereoButton.classList.toggle("active", isStereoEnabled);
+  stereoButton.textContent = `裸眼 3D：${suffix}`;
+  stereoButton.title = runtimeReady
+    ? trackerConnected
+      ? "设备服务已连接，进入全屏后可启用立体显示"
+      : "立体渲染引擎已加载，未检测到设备追踪服务时将使用固定视角立体显示"
+    : "立体渲染引擎正在初始化";
 }
 
 async function toggleFullscreen() {
@@ -706,11 +824,119 @@ async function toggleFullscreen() {
   }
 }
 
+function handleFullscreenChange() {
+  updateFullscreenButton();
+
+  if (document.fullscreenElement === viewerShell) {
+    maybeActivateStereoDisplay();
+  } else {
+    deactivateStereoDisplay();
+  }
+
+  setTimeout(handleResize, 50);
+}
+
 function updateFullscreenButton() {
-  const isFullscreen = Boolean(document.fullscreenElement);
+  const isFullscreen = document.fullscreenElement === viewerShell;
   fullscreenButton.classList.toggle("active", isFullscreen);
   fullscreenButton.textContent = isFullscreen ? "退出全屏" : "全屏查看";
-  setTimeout(handleResize, 50);
+}
+
+function maybeActivateStereoDisplay() {
+  if (!isStereoEnabled || !window.Module?.loaded) {
+    return;
+  }
+
+  isStereoDisplayActive = true;
+  controls.enabled = false;
+  captureStereoReferenceCamera();
+  syncStereoRuntimeParams();
+
+  try {
+    stereoTracker?.setDisplayMode?.(1, 1);
+  } catch {}
+
+  setStatus("裸眼 3D 全屏模式已启用");
+}
+
+function deactivateStereoDisplay() {
+  if (!isStereoDisplayActive) {
+    controls.enabled = true;
+    return;
+  }
+
+  isStereoDisplayActive = false;
+  controls.enabled = true;
+
+  try {
+    stereoTracker?.setDisplayMode?.(0, 0);
+  } catch {}
+}
+
+function captureStereoReferenceCamera() {
+  stereoBaseCameraPosition = camera.position.clone();
+  stereoBaseTarget = controls.target.clone();
+}
+
+function updateStereoTrackedCamera() {
+  if (!isStereoDisplayActive || !stereoBaseCameraPosition) {
+    return;
+  }
+
+  const eyePos = stereoTrackingData?.eye?.pos;
+  camera.position.copy(stereoBaseCameraPosition);
+
+  if (eyePos) {
+    camera.position.x += eyePos.x * stereoConfig.trackingScale;
+    camera.position.y += eyePos.y * stereoConfig.trackingScale;
+    camera.position.z += -eyePos.z * stereoConfig.trackingScale;
+  }
+
+  camera.lookAt(stereoBaseTarget);
+}
+
+function applyStereoCameraFrustum(targetCamera) {
+  const runtimeModule = window.Module;
+  if (!runtimeModule?.loaded || typeof runtimeModule.getFrustumValue !== "function") {
+    return;
+  }
+
+  const position = {
+    x: targetCamera.position.x,
+    y: targetCamera.position.y,
+    z: targetCamera.position.z
+  };
+
+  const matrix = runtimeModule.getFrustumValue(position);
+  if (!matrix) {
+    return;
+  }
+
+  targetCamera.projectionMatrix.set(
+    matrix.m00, matrix.m01, matrix.m02, matrix.m03,
+    matrix.m10, matrix.m11, matrix.m12, matrix.m13,
+    matrix.m20, matrix.m21, matrix.m22, matrix.m23,
+    matrix.m30, matrix.m31, matrix.m32, matrix.m33
+  );
+}
+
+function syncStereoRuntimeParams() {
+  const runtimeModule = window.Module;
+  if (!runtimeModule?.loaded) {
+    return;
+  }
+
+  if (typeof runtimeModule._setScreenParams === "function") {
+    runtimeModule._setScreenParams(
+      stereoConfig.screenWidth,
+      stereoConfig.screenHeight,
+      stereoConfig.screenScale
+    );
+  }
+
+  if (typeof runtimeModule._setCameraParams === "function") {
+    runtimeModule._setCameraParams(camera.near, camera.far);
+  }
 }
 
 function exportPng() {
@@ -786,16 +1012,32 @@ function handleResize() {
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   renderer.setSize(width, height);
+  stereoEffect?.setSize(width, height);
+  syncStereoRuntimeParams();
 }
 
 function animate() {
   requestAnimationFrame(animate);
   const delta = animationClock.getDelta();
+
   if (animationMixer) {
     animationMixer.update(delta);
   }
-  controls.update();
-  renderer.render(scene, camera);
+
+  if (isStereoDisplayActive) {
+    updateStereoTrackedCamera();
+    syncStereoRuntimeParams();
+  }
+
+  if (controls.enabled) {
+    controls.update();
+  }
+
+  if (isStereoDisplayActive && stereoEffect && document.fullscreenElement === viewerShell) {
+    stereoEffect.render(scene, camera);
+  } else {
+    renderer.render(scene, camera);
+  }
 }
 
 function formatBytes(bytes) {
@@ -832,7 +1074,7 @@ function formatPreviewError(error) {
       : "未知预览错误";
 
   if (message.includes("Unexpected token") || message.includes("JSON")) {
-    return "模型文件无法解析，可能文件损坏，或并不是有效的 3D 模型文件。";
+    return "模型文件无法解析，可能文件损坏，或者并不是有效的 3D 模型文件。";
   }
 
   if (message.includes("KHR_draco_mesh_compression") || message.includes("Draco")) {

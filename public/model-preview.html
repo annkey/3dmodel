@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
@@ -63,6 +63,7 @@
           <button id="toggle-autorotate" class="ghost-btn" type="button">自动旋转：关</button>
           <button id="toggle-wireframe" class="ghost-btn" type="button">线框模式：关</button>
           <button id="toggle-grid" class="ghost-btn" type="button">地面网格：开</button>
+          <button id="toggle-stereo-3d" class="ghost-btn" type="button">裸眼 3D：关</button>
           <button id="toggle-fullscreen" class="ghost-btn" type="button">全屏查看</button>
           <button id="export-image" class="ghost-btn wide" type="button">导出 PNG</button>
         </div>
@@ -121,6 +122,7 @@
           <p>滚轮：缩放</p>
           <p>右键拖动：平移</p>
           <p>如果是 OBJ 或 GLTF，请把对应的 .mtl、.bin 和贴图文件一起上传。</p>
+          <p>开启“裸眼 3D”后，进入全屏会切换到设备立体显示模式。</p>
         </div>
       </aside>
 
@@ -135,6 +137,22 @@
       </main>
     </div>
 
+    <script>
+      window.Module = {
+        loaded: false,
+        onRuntimeInitialized() {
+          window.Module.loaded = true;
+          if (typeof window.Module._setScreenParams === 'function') {
+            window.Module._setScreenParams(0.544, 0.306, 1);
+          }
+          if (typeof window.Module._setCameraParams === 'function') {
+            window.Module._setCameraParams(0.1, 1000);
+          }
+          window.dispatchEvent(new CustomEvent('kmax-module-ready'));
+        }
+      };
+    </script>
+    <script src="/vendor/kmax/kmax-stereo-bind.js"></script>
     <script type="importmap">
       {
         "imports": {
