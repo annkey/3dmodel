@@ -54,9 +54,8 @@ const meshMetric = document.getElementById("mesh-metric");
 const generatorModal = document.getElementById("generator-modal");
 const modelListModal = document.getElementById("model-list-modal");
 const generatorForm = document.getElementById("generator-form");
-const generatorProviderSelect = document.getElementById("generator-provider");
 const generatorModeSelect = document.getElementById("generator-mode");
-const generatorModelVersionSelect = document.getElementById("generator-model-version");
+const generatorConfigSummary = document.getElementById("generator-config-summary");
 const generatorPromptField = document.getElementById("generator-prompt-field");
 const generatorPromptInput = document.getElementById("generator-prompt");
 const generatorImageField = document.getElementById("generator-image-field");
@@ -73,6 +72,7 @@ const taskProgressTitle = document.getElementById("task-progress-title");
 const taskProgressMeta = document.getElementById("task-progress-meta");
 const taskProgressFill = document.getElementById("task-progress-fill");
 const taskProgressPercent = document.getElementById("task-progress-percent");
+const taskProgressCloseButton = document.getElementById("task-progress-close");
 const taskProgressOpenListButton = document.getElementById("task-progress-open-list");
 const modelPlaybackLoading = document.getElementById("model-playback-loading");
 const modelPlaybackLoadingTitle = document.getElementById("model-playback-loading-title");
@@ -181,6 +181,7 @@ let apiConfig = null;
 let generatedTasks = [];
 let activeTaskPollers = new Map();
 let activeGeneratingTaskId = "";
+let dismissedTaskProgressId = "";
 let autoPlayingGeneratedTaskId = "";
 let modelLoadRequestId = 0;
 let activePlaybackLoadingTaskId = "";
@@ -311,7 +312,7 @@ async function bootstrap() {
     renderGeneratedTaskList();
     openModal(modelListModal);
   });
-  generatorProviderSelect.addEventListener("change", syncGeneratorFormForProvider);
+  taskProgressCloseButton?.addEventListener("click", dismissTaskProgressOverlay);
   generatorModeSelect.addEventListener("change", syncGeneratorModeFieldState);
   generatorForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -485,6 +486,17 @@ function closeModal(modal) {
   modal.classList.add("hidden");
 }
 
+function dismissTaskProgressOverlay() {
+  if (!activeGeneratingTaskId) {
+    updateTaskProgressOverlay(null);
+    return;
+  }
+
+  dismissedTaskProgressId = activeGeneratingTaskId;
+  updateTaskProgressOverlay(null);
+  setStatus("生成任务仍在后台进行，可在 3D 模型列表里继续查看进度");
+}
+
 function fillSelectOptions(select, options, selectedValue) {
   if (!select) {
     return;
@@ -502,16 +514,29 @@ function fillSelectOptions(select, options, selectedValue) {
   }
 }
 
-function syncGeneratorFormForProvider() {
-  const provider = normalizeProviderValue(generatorProviderSelect.value);
+function getActiveGeneratorConfig() {
+  const providers = apiConfig?.providers || {};
+  const configuredProvider = normalizeProviderValue(apiConfig?.generatorSettings?.provider);
+  const fallbackProvider = providers[configuredProvider]?.enabled
+    ? configuredProvider
+    : providers.meshy?.enabled
+      ? "meshy"
+      : "tripo";
+  const provider = providers[fallbackProvider] ? fallbackProvider : "tripo";
   const providerConfig = GENERATOR_PROVIDER_CONFIG[provider];
-  const providerApiConfig = apiConfig?.providers?.[provider] || {};
+  const providerApiConfig = providers[provider] || {};
 
-  fillSelectOptions(
-    generatorModelVersionSelect,
-    providerConfig.modelVersions,
-    providerApiConfig.defaultModelVersion || providerConfig.defaultModelVersion
-  );
+  return {
+    provider,
+    providerName: apiConfig?.generatorSettings?.providerName || providerApiConfig.name || providerConfig.name,
+    modelVersion: apiConfig?.generatorSettings?.modelVersion || providerApiConfig.defaultModelVersion || providerConfig.defaultModelVersion,
+    enabled: providerApiConfig.enabled !== false
+  };
+}
+
+function syncGeneratorFormForProvider() {
+  const activeConfig = getActiveGeneratorConfig();
+  const providerConfig = GENERATOR_PROVIDER_CONFIG[activeConfig.provider];
   fillSelectOptions(
     generatorTextureQualitySelect,
     providerConfig.textureOptions,
@@ -525,9 +550,10 @@ function syncGeneratorFormForProvider() {
 
   generatorImageInput.accept = providerConfig.imageAccept;
   generatorPromptInput.placeholder = providerConfig.textPlaceholder;
-  generatorFormNote.textContent = providerApiConfig.enabled === false
-    ? `${providerConfig.name} 当前未在本地运行环境配置密钥，提交时会返回明确错误。`
-    : "优先使用 GLB 结果回放到当前预览器。";
+  if (generatorConfigSummary) {
+    generatorConfigSummary.textContent = "";
+  }
+  generatorFormNote.textContent = "";
 }
 
 function syncGeneratorModeFieldState() {
@@ -537,7 +563,8 @@ function syncGeneratorModeFieldState() {
 }
 
 async function handleGeneratorSubmit() {
-  const provider = normalizeProviderValue(generatorProviderSelect.value);
+  const activeConfig = getActiveGeneratorConfig();
+  const provider = activeConfig.provider;
   const providerConfig = GENERATOR_PROVIDER_CONFIG[provider];
   const mode = generatorModeSelect.value === "image" ? "image" : "text";
   const prompt = generatorPromptInput.value.trim();
@@ -559,14 +586,15 @@ async function handleGeneratorSubmit() {
   }
 
   generatorSubmitButton.disabled = true;
-  generatorSubmitButton.textContent = `正在提交到 ${providerConfig.name}...`;
+  generatorSubmitButton.textContent = `正在提交到 ${activeConfig.providerName}...`;
   closeModal(generatorModal);
 
+  dismissedTaskProgressId = "";
   activeGeneratingTaskId = "creating";
   updateTaskProgressOverlay({
     id: "creating",
     provider,
-    providerName: providerConfig.name,
+    providerName: activeConfig.providerName,
     prompt: prompt || (generatorImageInput.files?.[0]?.name || "图片生成"),
     status: "queued",
     statusText: "正在创建任务",
@@ -574,68 +602,32 @@ async function handleGeneratorSubmit() {
     progress: 2,
     finalized: false
   });
-  setStatus(`正在提交到 ${providerConfig.name}，请稍候...`);
+  setStatus(`正在提交到 ${activeConfig.providerName}，请稍候...`);
 
   try {
-    let result;
-    let resultProvider = provider;
-    let resultProviderConfig = providerConfig;
-
-    try {
-        result = await submitGeneratorTask({
-          provider,
-          mode,
-          prompt,
-          negativePrompt,
-          imageFile,
-          modelVersion: generatorModelVersionSelect.value,
-          textureQuality: generatorTextureQualitySelect.value,
-          geometryQuality: generatorGeometryQualitySelect.value
-        });
-    } catch (error) {
-      if (provider === "meshy" && isMeshyBusyError(error)) {
-        const fallbackProvider = "tripo";
-        const fallbackProviderConfig = GENERATOR_PROVIDER_CONFIG[fallbackProvider];
-        resultProvider = fallbackProvider;
-        resultProviderConfig = fallbackProviderConfig;
-
-        updateTaskProgressOverlay({
-          id: "creating",
-          provider: fallbackProvider,
-          providerName: fallbackProviderConfig.name,
-          prompt: prompt || (imageFile?.name || "图片生成"),
-          status: "running",
-          statusText: "Meshy 服务繁忙",
-          stageText: "正在切换到 Tripo3D 重试",
-          progress: 8,
-          finalized: false
-        });
-        setStatus("Meshy 当前繁忙，正在自动切换到 Tripo3D 重试...");
-
-        result = await submitGeneratorTask({
-          provider: fallbackProvider,
-          mode,
-          prompt,
-          negativePrompt,
-          imageFile
-        });
-      } else {
-        throw error;
-      }
-    }
+    const result = await submitGeneratorTask({
+      provider,
+      mode,
+      prompt,
+      negativePrompt,
+      imageFile,
+      modelVersion: activeConfig.modelVersion,
+      textureQuality: generatorTextureQualitySelect.value,
+      geometryQuality: generatorGeometryQualitySelect.value
+    });
 
     if (!result.taskId) {
-      throw createDetailedError(`${resultProviderConfig.name} 没有返回任务 ID。`, result);
+      throw createDetailedError(`${activeConfig.providerName} 没有返回任务 ID。`, result);
     }
 
     const createdTask = upsertGeneratedTask({
       id: result.taskId,
       taskId: result.taskId,
-      provider: resultProvider,
-      providerName: result.providerName || resultProviderConfig.name,
+      provider,
+      providerName: result.providerName || activeConfig.providerName,
       mode,
       prompt: prompt || (imageFile?.name || "图片生成"),
-      displayModelVersion: result.displayModelVersion || getGeneratorDefaults(resultProvider).modelVersion,
+      displayModelVersion: result.displayModelVersion || getGeneratorDefaults(provider).modelVersion,
       status: "queued",
       statusText: "任务已创建，等待生成",
       stageText: "任务创建成功",
@@ -646,11 +638,14 @@ async function handleGeneratorSubmit() {
       updatedAt: new Date().toISOString()
     });
 
+    if (dismissedTaskProgressId === "creating") {
+      dismissedTaskProgressId = createdTask.id;
+    }
     activeGeneratingTaskId = createdTask.id;
     updateTaskProgressOverlay(createdTask);
     renderGeneratedTaskList();
-    setStatus(`已提交到 ${resultProviderConfig.name}，正在等待模型生成`);
-    await pollGeneratedTask(createdTask.id, resultProvider);
+    setStatus(`已提交到 ${activeConfig.providerName}，正在等待模型生成`);
+    await pollGeneratedTask(createdTask.id, provider);
   } catch (error) {
     clearTaskProgressOverlay();
     setStatus(error.message || "模型生成提交失败");
@@ -666,9 +661,12 @@ function getGeneratorDefaults(provider) {
   const normalizedProvider = normalizeProviderValue(provider);
   const providerConfig = GENERATOR_PROVIDER_CONFIG[normalizedProvider];
   const providerApiConfig = apiConfig?.providers?.[normalizedProvider] || {};
+  const activeConfig = getActiveGeneratorConfig();
 
   return {
-    modelVersion: providerApiConfig.defaultModelVersion || providerConfig.defaultModelVersion,
+    modelVersion: activeConfig.provider === normalizedProvider
+      ? activeConfig.modelVersion
+      : providerApiConfig.defaultModelVersion || providerConfig.defaultModelVersion,
     textureQuality: providerConfig.defaultTextureQuality,
     geometryQuality: providerConfig.defaultGeometryQuality
   };
@@ -831,6 +829,11 @@ function updateTaskProgressOverlay(task) {
     return;
   }
 
+  if (dismissedTaskProgressId && dismissedTaskProgressId === task.id) {
+    taskProgressOverlay.classList.add("hidden");
+    return;
+  }
+
   const progress = getDisplayProgress(task);
   taskProgressOverlay.classList.remove("hidden");
   taskProgressTitle.textContent = task.prompt || "正在生成 3D 模型";
@@ -844,6 +847,7 @@ function clearTaskProgressOverlay(taskId = "") {
     return;
   }
 
+  dismissedTaskProgressId = "";
   activeGeneratingTaskId = "";
   updateTaskProgressOverlay(null);
 }
@@ -931,6 +935,9 @@ async function handleGeneratedTaskUpdate(requestTaskId, provider, task) {
 
     if (activeGeneratingTaskId === requestTaskId) {
       activeGeneratingTaskId = transitionedTask.id;
+      if (dismissedTaskProgressId === requestTaskId) {
+        dismissedTaskProgressId = transitionedTask.id;
+      }
       updateTaskProgressOverlay(transitionedTask);
     }
 
@@ -971,7 +978,11 @@ async function handleGeneratedTaskUpdate(requestTaskId, provider, task) {
 
     if (nextTask.status === "success" && nextTask.preferredModelUrl) {
       setStatus("模型生成成功，可直接播放");
-      if (activeGeneratingTaskId === nextTask.id && autoPlayingGeneratedTaskId !== nextTask.id) {
+      if (
+        activeGeneratingTaskId === nextTask.id
+        && dismissedTaskProgressId !== nextTask.id
+        && autoPlayingGeneratedTaskId !== nextTask.id
+      ) {
         autoPlayingGeneratedTaskId = nextTask.id;
         window.setTimeout(() => {
           void playGeneratedTask(nextTask.id);

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>模型工具配置</title>
+    <link rel="stylesheet" href="/model-setting.css" />
+  </head>
+  <body>
+    <div class="settings-page">
+      <aside class="settings-sidebar">
+        <div class="sidebar-brand">
+          <p class="sidebar-eyebrow">Model Setting</p>
+          <h1>工具配置</h1>
+          <p>统一管理 AI 生模配置，为后续接入用户系统预留结构。</p>
+        </div>
+
+        <nav class="sidebar-menu" aria-label="工具配置菜单">
+          <button class="menu-item active" type="button">生成配置</button>
+          <div class="menu-placeholder">
+            <span>用户系统</span>
+            <small>后续可扩展账号、权限、套餐等菜单</small>
+          </div>
+        </nav>
+      </aside>
+
+      <main class="settings-content">
+        <section class="content-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-eyebrow">Generator Config</p>
+              <h2>生成配置</h2>
+              <p>这里配置统一的平台和模型版本，所有用户都按这份公共配置生成 3D 模型。</p>
+            </div>
+          </div>
+
+          <form id="generator-settings-form" class="settings-form">
+            <label class="form-field">
+              <span>生成平台</span>
+              <select id="settings-provider" name="provider"></select>
+            </label>
+
+            <label class="form-field">
+              <span>模型版本</span>
+              <select id="settings-model-version" name="modelVersion"></select>
+            </label>
+
+            <div id="settings-runtime-note" class="runtime-note"></div>
+
+            <div class="form-actions">
+              <button id="save-settings" class="primary-btn" type="submit">保存公共配置</button>
+              <a class="secondary-link" href="/model-preview.html">去预览页验证</a>
+            </div>
+          </form>
+
+          <div id="settings-feedback" class="feedback hidden" aria-live="polite"></div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/model-setting.js"></script>
+  </body>
+</html>

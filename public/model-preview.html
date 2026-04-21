@@ -108,7 +108,10 @@
 
         <div id="task-progress-overlay" class="task-progress-overlay hidden" aria-live="polite">
           <div class="task-progress-card">
-            <span class="task-progress-eyebrow">模型生成中</span>
+            <div class="task-progress-head">
+              <span class="task-progress-eyebrow">模型生成中</span>
+              <button id="task-progress-close" class="task-progress-close" type="button" aria-label="关闭生成进度弹窗" title="关闭">×</button>
+            </div>
             <strong id="task-progress-title">等待创建任务...</strong>
             <p id="task-progress-meta">提交后会在这里显示生成进度。</p>
             <div class="task-progress-track">
@@ -134,20 +137,11 @@
             <div class="modal-head">
               <div>
                 <h2 id="generator-modal-title">生成 3D 模型</h2>
-                <p>填写必要信息后开始生成。</p>
               </div>
               <button class="modal-close" type="button" data-close-modal="generator-modal" aria-label="关闭">×</button>
             </div>
 
             <form id="generator-form" class="modal-form">
-              <label class="form-field">
-                <span>生成平台</span>
-                <select id="generator-provider" name="provider">
-                  <option value="meshy" selected>Meshy</option>
-                  <option value="tripo">Tripo3D</option>
-                </select>
-              </label>
-
               <label class="form-field">
                 <span>生成方式</span>
                 <select id="generator-mode" name="mode">
@@ -156,10 +150,7 @@
                 </select>
               </label>
 
-              <label class="form-field">
-                <span>模型版本</span>
-                <select id="generator-model-version" name="modelVersion"></select>
-              </label>
+              <div id="generator-config-summary" class="form-summary hidden" aria-hidden="true"></div>
 
               <label class="form-field prompt-field" id="generator-prompt-field">
                 <span>提示词</span>
@@ -188,7 +179,7 @@
                 <input id="generator-negative-prompt" name="negativePrompt" type="text" placeholder="例如：避免模糊、避免背景杂乱" />
               </label>
 
-              <div id="generator-form-note" class="form-note">优先使用 GLB 结果回放到当前预览器。</div>
+              <div id="generator-form-note" class="form-note hidden" aria-hidden="true"></div>
 
               <div class="modal-actions">
                 <button class="secondary-btn" type="button" data-close-modal="generator-modal">取消</button>

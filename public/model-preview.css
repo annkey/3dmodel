@@ -153,6 +153,9 @@ body {
 }
 
 .action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 34px;
   padding: 0 12px;
   border: 1px solid rgba(37, 99, 235, 0.14);
@@ -163,6 +166,7 @@ body {
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  text-decoration: none;
   transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
   box-shadow: 0 10px 24px rgba(37, 99, 235, 0.2);
 }
@@ -377,12 +381,40 @@ body {
   pointer-events: auto;
 }
 
+.task-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
 .task-progress-eyebrow {
   display: inline-block;
-  margin-bottom: 8px;
   color: var(--accent);
   font-size: 12px;
   font-weight: 700;
+}
+
+.task-progress-close {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--text);
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.task-progress-close:hover {
+  transform: translateY(-1px);
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--accent-dark);
 }
 
 .task-progress-card strong {
@@ -541,6 +573,16 @@ body {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.form-summary {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(37, 99, 235, 0.06);
+  border: 1px solid rgba(37, 99, 235, 0.12);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .modal-actions {

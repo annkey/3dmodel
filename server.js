@@ -8,6 +8,7 @@ const { URL } = require("node:url");
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
 const envPath = path.join(rootDir, ".env.local");
+const generatorSettingsPath = path.join(rootDir, "generator-settings.json");
 
 loadEnvFile(envPath);
 
@@ -52,6 +53,27 @@ const MIME_TYPES = {
   ".wasm": "application/wasm"
 };
 
+const GENERATOR_PROVIDER_OPTIONS = {
+  tripo: {
+    name: "Tripo3D",
+    defaultModelVersion: "P1-20260311",
+    modelVersions: [
+      { value: "P1-20260311", label: "P1-20260311" },
+      { value: "v3.1-20260211", label: "v3.1-20260211" },
+      { value: "v2.5-20250123", label: "v2.5-20250123" }
+    ]
+  },
+  meshy: {
+    name: "Meshy",
+    defaultModelVersion: "latest",
+    modelVersions: [
+      { value: "latest", label: "latest (Meshy 6)" },
+      { value: "meshy-6", label: "meshy-6" },
+      { value: "meshy-5", label: "meshy-5" }
+    ]
+  }
+};
+
 const server = http.createServer(async (req, res) => {
   try {
     const requestUrl = new URL(req.url, `http://${req.headers.host}`);
@@ -81,49 +103,43 @@ server.listen(PORT, () => {
 
 async function handleApi(req, res, requestUrl) {
   if (req.method === "GET" && requestUrl.pathname === "/api/config") {
-    if (GENERATOR_API_BASE) {
-      try {
-        const remoteConfig = await proxyRemoteJson("/api/config");
-        sendJson(res, 200, {
-          ...remoteConfig,
-          generatorApiBase: GENERATOR_API_BASE,
-          proxied: true
-        });
-      } catch (error) {
-        sendJson(res, error.status || 502, {
-          error: "RemoteConfigFailed",
-          message: error.message || "Failed to read remote generator config.",
-          details: error.details || null,
-          generatorApiBase: GENERATOR_API_BASE,
-          proxied: true
-        });
-      }
+    sendJson(res, 200, buildLocalGeneratorConfigResponse());
+    return;
+  }
+
+  if (req.method === "POST" && requestUrl.pathname === "/api/generator-settings") {
+    try {
+      const request = toWebRequest(req, requestUrl);
+      const payload = await request.json();
+      const savedSettings = saveGeneratorSettings(payload);
+      sendJson(res, 200, {
+        ok: true,
+        message: "Generator settings saved.",
+        generatorSettings: savedSettings,
+        ...buildLocalGeneratorConfigResponse()
+      });
+      return;
+    } catch (error) {
+      sendJson(res, error.status || 400, {
+        error: "GeneratorSettingsSaveFailed",
+        message: error.message || "Failed to save generator settings.",
+        details: error.details || null
+      });
       return;
     }
-
-    sendJson(res, 200, {
-      ok: true,
-      generatorApiBase: "",
-      proxied: false,
-      providers: {
-        tripo: {
-          enabled: Boolean(TRIPO_API_KEY),
-          defaultModelVersion: "P1-20260311"
-        },
-        meshy: {
-          enabled: Boolean(MESHY_API_KEY),
-          defaultModelVersion: "latest"
-        }
-      }
-    });
     return;
   }
 
   if (req.method === "POST" && requestUrl.pathname === "/api/generate") {
     try {
+      const request = toWebRequest(req, requestUrl);
+      const form = await request.formData();
+      const generatorSettings = getGeneratorSettings();
+      form.set("provider", generatorSettings.provider);
+      form.set("modelVersion", generatorSettings.modelVersion);
+      const provider = generatorSettings.provider;
+
       if (GENERATOR_API_BASE) {
-        const request = toWebRequest(req, requestUrl);
-        const form = await request.formData();
         const remoteResult = await proxyRemoteJson("/api/generate", {
           method: "POST",
           body: form
@@ -135,10 +151,6 @@ async function handleApi(req, res, requestUrl) {
         });
         return;
       }
-
-      const request = toWebRequest(req, requestUrl);
-      const form = await request.formData();
-      const provider = normalizeProvider(form.get("provider"));
 
       if (provider === "meshy") {
         await handleMeshyGenerate(res, form);
@@ -842,6 +854,119 @@ function buildMeshyDownloadItems(modelUrls, thumbnailUrl) {
   }
 
   return items;
+}
+
+function buildLocalGeneratorConfigResponse() {
+  const providers = buildProviderConfigMap();
+  const generatorSettings = getGeneratorSettings(providers);
+
+  return {
+    ok: true,
+    generatorApiBase: "",
+    proxied: false,
+    providers,
+    generatorSettings
+  };
+}
+
+function buildProviderConfigMap() {
+  const useRemoteGenerator = Boolean(GENERATOR_API_BASE);
+  return {
+    tripo: {
+      enabled: useRemoteGenerator || Boolean(TRIPO_API_KEY),
+      name: GENERATOR_PROVIDER_OPTIONS.tripo.name,
+      defaultModelVersion: GENERATOR_PROVIDER_OPTIONS.tripo.defaultModelVersion,
+      modelVersions: GENERATOR_PROVIDER_OPTIONS.tripo.modelVersions
+    },
+    meshy: {
+      enabled: useRemoteGenerator || Boolean(MESHY_API_KEY),
+      name: GENERATOR_PROVIDER_OPTIONS.meshy.name,
+      defaultModelVersion: GENERATOR_PROVIDER_OPTIONS.meshy.defaultModelVersion,
+      modelVersions: GENERATOR_PROVIDER_OPTIONS.meshy.modelVersions
+    }
+  };
+}
+
+function getGeneratorSettings(providers = buildProviderConfigMap()) {
+  const stored = readGeneratorSettingsFile();
+  const availableProvider = selectDefaultProvider(providers);
+  const fallbackProvider = providers[availableProvider] ? availableProvider : "tripo";
+  const requestedProvider = normalizeProvider(stored.provider || fallbackProvider);
+  const provider = providers[requestedProvider]?.enabled ? requestedProvider : fallbackProvider;
+  const modelVersion = resolveModelVersion(provider, stored.modelVersion, providers);
+
+  return {
+    provider,
+    providerName: providers[provider]?.name || provider,
+    modelVersion
+  };
+}
+
+function saveGeneratorSettings(payload) {
+  const providers = buildProviderConfigMap();
+  const provider = normalizeProvider(payload?.provider);
+
+  if (!providers[provider]?.enabled) {
+    const error = new Error("Selected provider is not enabled in the current runtime environment.");
+    error.status = 400;
+    throw error;
+  }
+
+  const modelVersion = resolveModelVersion(provider, payload?.modelVersion, providers, true);
+  const nextSettings = {
+    provider,
+    modelVersion
+  };
+
+  fs.writeFileSync(generatorSettingsPath, `${JSON.stringify(nextSettings, null, 2)}\n`, "utf8");
+
+  return {
+    ...nextSettings,
+    providerName: providers[provider]?.name || provider
+  };
+}
+
+function readGeneratorSettingsFile() {
+  if (!fs.existsSync(generatorSettingsPath)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(generatorSettingsPath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function selectDefaultProvider(providers) {
+  if (providers.meshy?.enabled) {
+    return "meshy";
+  }
+
+  if (providers.tripo?.enabled) {
+    return "tripo";
+  }
+
+  return "tripo";
+}
+
+function resolveModelVersion(provider, requestedValue, providers = buildProviderConfigMap(), strict = false) {
+  const modelVersions = providers[provider]?.modelVersions || [];
+  const allowedValues = new Set(modelVersions.map((item) => item.value));
+  const defaultValue = providers[provider]?.defaultModelVersion || GENERATOR_PROVIDER_OPTIONS[provider]?.defaultModelVersion || "";
+  const requestedModelVersion = String(requestedValue || "").trim();
+
+  if (requestedModelVersion && allowedValues.has(requestedModelVersion)) {
+    return requestedModelVersion;
+  }
+
+  if (strict && requestedModelVersion) {
+    const error = new Error("Selected model version is not supported for the current provider.");
+    error.status = 400;
+    throw error;
+  }
+
+  return defaultValue;
 }
 
 async function handleStatic(req, res, pathname) {
