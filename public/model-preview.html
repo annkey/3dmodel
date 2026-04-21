@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
@@ -8,143 +8,221 @@
   </head>
   <body>
     <div class="preview-page">
-      <aside class="sidebar">
-        <div class="topbar">
-          <div>
-            <h1>本地 3D 模型预览</h1>
-          </div>
-          <a class="toplink" href="/">返回生成页</a>
+      <main class="viewer-shell" id="viewer-shell">
+        <div id="viewer" class="viewer"></div>
+
+        <div class="hud top-left">
+          <section class="hud-card metrics-card" aria-label="模型参数">
+            <div class="metrics-grid">
+              <div class="metric-item">
+                <span>文件数</span>
+                <strong id="file-count">0</strong>
+              </div>
+              <div class="metric-item">
+                <span>格式</span>
+                <strong id="format-stat">-</strong>
+              </div>
+              <div class="metric-item">
+                <span>网格数</span>
+                <strong id="mesh-stat">-</strong>
+              </div>
+              <div class="metric-item">
+                <span>三角面</span>
+                <strong id="triangle-stat">-</strong>
+              </div>
+              <div class="metric-item">
+                <span>顶点数</span>
+                <strong id="vertex-stat">-</strong>
+              </div>
+              <div class="metric-item">
+                <span>动画数</span>
+                <strong id="animation-stat">0</strong>
+              </div>
+              <div class="metric-item">
+                <span>文件大小</span>
+                <strong id="file-size-stat">-</strong>
+              </div>
+              <div class="metric-item">
+                <span>尺寸</span>
+                <strong id="size-stat">-</strong>
+              </div>
+            </div>
+          </section>
         </div>
 
-        <p class="lead">
-          支持 GLB、GLTF、FBX、OBJ、STL。上传本地模型文件后，可以直接在浏览器中进行旋转、缩放和平移预览。
-        </p>
+        <div class="hud top-right">
+          <div class="toolbar toolbar-ghost" aria-label="模型生成与列表">
+            <label class="action-btn action-btn-secondary action-btn-file" for="model-files">本地模型播放</label>
+            <button id="open-generator-modal" class="action-btn" type="button">AI生成模型</button>
+            <button id="open-model-list-modal" class="action-btn action-btn-secondary" type="button">3D模型列表</button>
+          </div>
+        </div>
 
-        <label class="upload-card" id="upload-card" for="model-files">
+        <div class="hud bottom-right">
+          <div class="toolbar" aria-label="预览操作">
+            <label class="tool-btn tool-btn-upload" for="model-files" data-label="选择模型" title="选择模型">
+              <span aria-hidden="true">&#10548;</span>
+            </label>
+            <button id="toggle-fullscreen" class="tool-btn" type="button" data-label="全屏查看" title="全屏查看">
+              <span aria-hidden="true">&#x26F6;</span>
+            </button>
+            <button id="toggle-stereo-3d" class="tool-btn" type="button" data-label="裸眼 3D" title="裸眼 3D">
+              <span aria-hidden="true">&#9723;</span>
+            </button>
+            <button id="reset-camera" class="tool-btn" type="button" data-label="重置视角" title="重置视角">
+              <span aria-hidden="true">&#9678;</span>
+            </button>
+            <button id="toggle-autorotate" class="tool-btn" type="button" data-label="自动旋转" title="自动旋转">
+              <span aria-hidden="true">&#8635;</span>
+            </button>
+            <button id="toggle-wireframe" class="tool-btn" type="button" data-label="线框模式" title="线框模式">
+              <span aria-hidden="true">#</span>
+            </button>
+            <button id="toggle-grid" class="tool-btn" type="button" data-label="地面网格" title="地面网格">
+              <span aria-hidden="true">&#9642;</span>
+            </button>
+            <select id="submodel-select" class="tool-select tool-select-wide hidden" title="子模型文件" aria-label="子模型文件">
+              <option value="">主模型文件</option>
+            </select>
+            <select id="theme-select" class="tool-select" title="背景主题" aria-label="背景主题">
+              <option value="warm">暖光工作台</option>
+              <option value="studio" selected>明亮摄影棚</option>
+              <option value="dark">深色展示台</option>
+            </select>
+            <button id="export-image" class="tool-btn" type="button" data-label="导出 PNG" title="导出 PNG">
+              <span aria-hidden="true">&#8681;</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="task-progress-overlay" class="task-progress-overlay hidden" aria-live="polite">
+          <div class="task-progress-card">
+            <span class="task-progress-eyebrow">模型生成中</span>
+            <strong id="task-progress-title">等待创建任务...</strong>
+            <p id="task-progress-meta">提交后会在这里显示生成进度。</p>
+            <div class="task-progress-track">
+              <div id="task-progress-fill" class="task-progress-fill"></div>
+            </div>
+            <div class="task-progress-footer">
+              <span id="task-progress-percent">0%</span>
+              <button id="task-progress-open-list" class="text-btn" type="button">查看模型列表</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="model-playback-loading" class="model-playback-loading hidden" aria-live="polite">
+          <div class="model-playback-loading-card">
+            <strong id="model-playback-loading-title">正在加载模型...</strong>
+            <p id="model-playback-loading-meta">加载完成前会锁定其他模型切换。</p>
+          </div>
+        </div>
+
+        <div id="generator-modal" class="modal-shell hidden" role="dialog" aria-modal="true" aria-labelledby="generator-modal-title">
+          <div class="modal-backdrop" data-close-modal="generator-modal"></div>
+          <section class="modal-card">
+            <div class="modal-head">
+              <div>
+                <h2 id="generator-modal-title">生成 3D 模型</h2>
+                <p>填写必要信息后开始生成。</p>
+              </div>
+              <button class="modal-close" type="button" data-close-modal="generator-modal" aria-label="关闭">×</button>
+            </div>
+
+            <form id="generator-form" class="modal-form">
+              <label class="form-field">
+                <span>生成平台</span>
+                <select id="generator-provider" name="provider">
+                  <option value="meshy" selected>Meshy</option>
+                  <option value="tripo">Tripo3D</option>
+                </select>
+              </label>
+
+              <label class="form-field">
+                <span>生成方式</span>
+                <select id="generator-mode" name="mode">
+                  <option value="text">文字生成</option>
+                  <option value="image">图片生成</option>
+                </select>
+              </label>
+
+              <label class="form-field">
+                <span>模型版本</span>
+                <select id="generator-model-version" name="modelVersion"></select>
+              </label>
+
+              <label class="form-field prompt-field" id="generator-prompt-field">
+                <span>提示词</span>
+                <textarea id="generator-prompt" name="prompt" rows="4" placeholder="例如：一朵高细节的白粉色百合花，摄影棚灯光，写实材质"></textarea>
+              </label>
+
+              <label class="form-field hidden" id="generator-image-field">
+                <span>参考图片</span>
+                <input id="generator-image" name="image" type="file" accept="image/png,image/jpeg,image/webp" />
+              </label>
+
+              <div class="form-grid">
+                <label class="form-field">
+                  <span>纹理质量</span>
+                  <select id="generator-texture-quality" name="textureQuality"></select>
+                </label>
+
+                <label class="form-field">
+                  <span>几何质量</span>
+                  <select id="generator-geometry-quality" name="geometryQuality"></select>
+                </label>
+              </div>
+
+              <label class="form-field">
+                <span>补充参数</span>
+                <input id="generator-negative-prompt" name="negativePrompt" type="text" placeholder="例如：避免模糊、避免背景杂乱" />
+              </label>
+
+              <div id="generator-form-note" class="form-note">优先使用 GLB 结果回放到当前预览器。</div>
+
+              <div class="modal-actions">
+                <button class="secondary-btn" type="button" data-close-modal="generator-modal">取消</button>
+                <button id="generator-submit" class="primary-btn" type="submit">开始生成</button>
+              </div>
+            </form>
+          </section>
+        </div>
+
+        <div id="model-list-modal" class="modal-shell hidden" role="dialog" aria-modal="true" aria-labelledby="model-list-modal-title">
+          <div class="modal-backdrop" data-close-modal="model-list-modal"></div>
+          <section class="modal-card modal-card-wide">
+            <div class="modal-head">
+              <div>
+                <h2 id="model-list-modal-title">3D 模型列表</h2>
+                <p>查看历史生成记录与当前进度。</p>
+              </div>
+              <button class="modal-close" type="button" data-close-modal="model-list-modal" aria-label="关闭">×</button>
+            </div>
+
+            <div id="model-list-empty" class="empty-state">还没有生成记录，先创建一个 3D 模型吧。</div>
+            <div id="model-list-items" class="model-list"></div>
+          </section>
+        </div>
+
+        <div class="hidden-ui" aria-hidden="true">
+          <span id="status-text">等待上传</span>
           <input
             id="model-files"
             type="file"
             multiple
             accept=".glb,.gltf,.fbx,.obj,.stl,.bin,.mtl,.jpg,.jpeg,.png,.webp"
           />
-          <strong>选择模型文件</strong>
-          <span>拖拽文件到这里，或点击选择</span>
-          <small>主模型格式支持：.glb .gltf .fbx .obj .stl</small>
-        </label>
-
-        <div class="field">
-          <label for="entry-file">主模型文件</label>
           <select id="entry-file" disabled>
             <option value="">请先选择模型文件</option>
           </select>
-        </div>
-
-        <div class="field-grid">
-          <div class="field">
-            <label for="theme-select">背景主题</label>
-            <select id="theme-select">
-              <option value="warm" selected>暖光工作台</option>
-              <option value="studio">明亮摄影棚</option>
-              <option value="dark">深色展示台</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="light-range">灯光强度</label>
-            <div class="range-wrap">
-              <input id="light-range" type="range" min="0.6" max="2.6" step="0.1" value="1.4" />
-              <span id="light-value">1.4x</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="actions">
-          <button id="load-model" class="primary-btn" disabled>加载预览</button>
-          <button id="reset-camera" class="ghost-btn" type="button">重置视角</button>
-          <button id="toggle-autorotate" class="ghost-btn" type="button">自动旋转：关</button>
-          <button id="toggle-wireframe" class="ghost-btn" type="button">线框模式：关</button>
-          <button id="toggle-grid" class="ghost-btn" type="button">地面网格：开</button>
-          <button id="toggle-stereo-3d" class="ghost-btn" type="button">裸眼 3D：关</button>
-          <button id="toggle-fullscreen" class="ghost-btn" type="button">全屏查看</button>
-          <button id="export-image" class="ghost-btn wide" type="button">导出 PNG</button>
-        </div>
-
-        <section class="stereo-panel" aria-labelledby="stereo-panel-title">
-          <div class="stereo-panel-head">
-            <div>
-              <p class="eyebrow">Stereo</p>
-              <h2 id="stereo-panel-title">裸眼 3D 显示状态</h2>
-            </div>
-            <span id="stereo-device-badge" class="device-badge offline">设备未连接</span>
-          </div>
-          <p id="stereo-status-detail" class="stereo-status-detail">
-            当前为普通 3D 预览模式。开启裸眼 3D 后，进入全屏即可切到立体显示。
-          </p>
-        </section>
-
-        <div class="info-grid">
-          <div class="info-card">
-            <span>状态</span>
-            <strong id="status-text">等待上传</strong>
-          </div>
-          <div class="info-card">
-            <span>文件数</span>
-            <strong id="file-count">0</strong>
-          </div>
-          <div class="info-card">
-            <span>格式</span>
-            <strong id="format-stat">-</strong>
-          </div>
-          <div class="info-card">
-            <span>网格数</span>
-            <strong id="mesh-stat">-</strong>
-          </div>
-          <div class="info-card">
-            <span>三角面</span>
-            <strong id="triangle-stat">-</strong>
-          </div>
-          <div class="info-card">
-            <span>顶点数</span>
-            <strong id="vertex-stat">-</strong>
-          </div>
-          <div class="info-card">
-            <span>动画数</span>
-            <strong id="animation-stat">0</strong>
-          </div>
-          <div class="info-card">
-            <span>尺寸</span>
-            <strong id="size-stat">-</strong>
-          </div>
-        </div>
-
-        <div class="field">
-          <label>已上传文件</label>
-          <ul id="file-list" class="file-list">
-            <li>暂未选择文件</li>
-          </ul>
-        </div>
-
-        <div class="field">
-          <label>最近打开</label>
-          <ul id="recent-list" class="file-list recent-list">
-            <li>还没有历史记录</li>
-          </ul>
-        </div>
-
-        <div class="tips">
-          <p>左键拖动：旋转模型</p>
-          <p>滚轮：缩放</p>
-          <p>右键拖动：平移</p>
-          <p>如果是 OBJ 或 GLTF，请把对应的 .mtl、.bin 和贴图文件一起上传。</p>
-          <p>开启“裸眼 3D”后，进入全屏会切换到设备立体显示模式。</p>
-        </div>
-      </aside>
-
-      <main class="viewer-shell" id="viewer-shell">
-        <div id="viewer" class="viewer"></div>
-        <div class="viewer-overlay top">
+          <input id="light-range" type="range" min="0.6" max="2.6" step="0.1" value="1.4" />
+          <span id="light-value">1.4x</span>
+          <button id="load-model" type="button">加载预览</button>
+          <span id="stereo-device-badge">设备未连接</span>
+          <p id="stereo-status-detail">当前为普通 3D 预览模式。</p>
+          <ul id="file-list"><li>暂未选择文件</li></ul>
+          <ul id="recent-list"><li>还没有历史记录</li></ul>
+          <span id="size-stat-hidden">-</span>
           <span id="model-name">尚未加载模型</span>
-        </div>
-        <div class="viewer-overlay bottom">
           <span id="model-meta">上传本地模型文件后，即可在浏览器中预览。</span>
         </div>
       </main>
@@ -155,13 +233,13 @@
         loaded: false,
         onRuntimeInitialized() {
           window.Module.loaded = true;
-          if (typeof window.Module._setScreenParams === 'function') {
+          if (typeof window.Module._setScreenParams === "function") {
             window.Module._setScreenParams(0.544, 0.306, 1);
           }
-          if (typeof window.Module._setCameraParams === 'function') {
+          if (typeof window.Module._setCameraParams === "function") {
             window.Module._setCameraParams(0.1, 1000);
           }
-          window.dispatchEvent(new CustomEvent('kmax-module-ready'));
+          window.dispatchEvent(new CustomEvent("kmax-module-ready"));
         }
       };
     </script>

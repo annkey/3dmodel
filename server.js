@@ -2,6 +2,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
+const { Readable } = require("node:stream");
 const { URL } = require("node:url");
 
 const rootDir = __dirname;
@@ -15,6 +16,7 @@ const TRIPO_API_KEY = process.env.TRIPO_API_KEY || "";
 const TRIPO_API_BASE = "https://api.tripo3d.ai/v2/openapi";
 const MESHY_API_KEY = process.env.MESHY_API_KEY || "";
 const MESHY_API_BASE = "https://api.meshy.ai";
+const GENERATOR_API_BASE = normalizeApiBase(process.env.GENERATOR_API_BASE || "");
 
 const TRIPO_FINAL_STATUSES = new Set([
   "success",
@@ -79,8 +81,30 @@ server.listen(PORT, () => {
 
 async function handleApi(req, res, requestUrl) {
   if (req.method === "GET" && requestUrl.pathname === "/api/config") {
+    if (GENERATOR_API_BASE) {
+      try {
+        const remoteConfig = await proxyRemoteJson("/api/config");
+        sendJson(res, 200, {
+          ...remoteConfig,
+          generatorApiBase: GENERATOR_API_BASE,
+          proxied: true
+        });
+      } catch (error) {
+        sendJson(res, error.status || 502, {
+          error: "RemoteConfigFailed",
+          message: error.message || "Failed to read remote generator config.",
+          details: error.details || null,
+          generatorApiBase: GENERATOR_API_BASE,
+          proxied: true
+        });
+      }
+      return;
+    }
+
     sendJson(res, 200, {
       ok: true,
+      generatorApiBase: "",
+      proxied: false,
       providers: {
         tripo: {
           enabled: Boolean(TRIPO_API_KEY),
@@ -97,6 +121,21 @@ async function handleApi(req, res, requestUrl) {
 
   if (req.method === "POST" && requestUrl.pathname === "/api/generate") {
     try {
+      if (GENERATOR_API_BASE) {
+        const request = toWebRequest(req, requestUrl);
+        const form = await request.formData();
+        const remoteResult = await proxyRemoteJson("/api/generate", {
+          method: "POST",
+          body: form
+        });
+        sendJson(res, 200, {
+          ...remoteResult,
+          generatorApiBase: GENERATOR_API_BASE,
+          proxied: true
+        });
+        return;
+      }
+
       const request = toWebRequest(req, requestUrl);
       const form = await request.formData();
       const provider = normalizeProvider(form.get("provider"));
@@ -130,6 +169,16 @@ async function handleApi(req, res, requestUrl) {
     }
 
     try {
+      if (GENERATOR_API_BASE) {
+        const remoteTask = await proxyRemoteJson(`/api/task/${encodeURIComponent(taskId)}?provider=${encodeURIComponent(provider)}`);
+        sendJson(res, 200, {
+          ...remoteTask,
+          generatorApiBase: GENERATOR_API_BASE,
+          proxied: true
+        });
+        return;
+      }
+
       if (provider === "meshy") {
         await handleMeshyTaskQuery(res, taskId);
       } else {
@@ -140,6 +189,20 @@ async function handleApi(req, res, requestUrl) {
       sendJson(res, error.status || 400, {
         error: "TaskQueryFailed",
         message: error.message || "Failed to query task.",
+        details: error.details || null
+      });
+      return;
+    }
+  }
+
+  if ((req.method === "GET" || req.method === "HEAD") && requestUrl.pathname === "/api/asset") {
+    try {
+      await handleAssetProxy(req, res, requestUrl);
+      return;
+    } catch (error) {
+      sendJson(res, error.status || 400, {
+        error: "AssetProxyFailed",
+        message: error.message || "Failed to proxy asset.",
         details: error.details || null
       });
       return;
@@ -579,6 +642,112 @@ async function parseHttpJson(response) {
   return data;
 }
 
+async function proxyRemoteJson(pathname, options = {}) {
+  if (!GENERATOR_API_BASE) {
+    const error = new Error("GENERATOR_API_BASE is not configured.");
+    error.status = 500;
+    throw error;
+  }
+
+  const response = await fetch(`${GENERATOR_API_BASE}${pathname}`, {
+    method: options.method || "GET",
+    headers: {
+      Accept: "application/json",
+      ...(options.headers || {})
+    },
+    body: options.body
+  });
+
+  return parseHttpJson(response);
+}
+
+async function handleAssetProxy(req, res, requestUrl) {
+  const rawUrl = String(requestUrl.searchParams.get("url") || "").trim();
+  if (!rawUrl) {
+    const error = new Error("Missing asset url.");
+    error.status = 400;
+    throw error;
+  }
+
+  let targetUrl;
+  try {
+    targetUrl = new URL(rawUrl);
+  } catch {
+    const error = new Error("Invalid asset url.");
+    error.status = 400;
+    throw error;
+  }
+
+  if (!["http:", "https:"].includes(targetUrl.protocol)) {
+    const error = new Error("Only http/https asset urls are supported.");
+    error.status = 400;
+    throw error;
+  }
+
+  const response = await fetch(targetUrl, {
+    method: req.method === "HEAD" ? "HEAD" : "GET",
+    headers: {
+      Accept: "*/*"
+    }
+  });
+
+  if (!response.ok) {
+    const details = await safeReadResponseText(response);
+    const error = new Error(`Failed to fetch remote asset (${response.status}).`);
+    error.status = response.status;
+    error.details = details;
+    throw error;
+  }
+
+  const fileName = path.basename(targetUrl.pathname || "asset");
+  const ext = path.extname(fileName).toLowerCase();
+  const contentType = response.headers.get("content-type") || inferAssetContentType(ext);
+  const contentLength = response.headers.get("content-length");
+
+  const headers = {
+    "Content-Type": contentType,
+    "Cache-Control": "no-store, max-age=0",
+    "Content-Disposition": `inline; filename="${fileName || "asset"}"`
+  };
+
+  if (contentLength) {
+    headers["Content-Length"] = contentLength;
+  }
+
+  res.writeHead(200, headers);
+
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
+
+  if (!response.body) {
+    res.end();
+    return;
+  }
+
+  Readable.fromWeb(response.body).pipe(res);
+}
+
+async function safeReadResponseText(response) {
+  try {
+    return await response.text();
+  } catch {
+    return "";
+  }
+}
+
+function inferAssetContentType(ext) {
+  const map = {
+    ".glb": "model/gltf-binary",
+    ".gltf": "model/gltf+json",
+    ".fbx": "application/octet-stream",
+    ".obj": "text/plain; charset=utf-8",
+    ".stl": "model/stl"
+  };
+  return map[ext] || "application/octet-stream";
+}
+
 async function fileToDataUri(file) {
   const arrayBuffer = await file.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
@@ -838,4 +1007,8 @@ function loadEnvFile(filePath) {
       process.env[key] = value;
     }
   }
+}
+
+function normalizeApiBase(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
 }
