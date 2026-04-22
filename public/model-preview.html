@@ -131,8 +131,14 @@
 
         <div id="model-playback-loading" class="model-playback-loading hidden" aria-live="polite">
           <div class="model-playback-loading-card">
-            <strong id="model-playback-loading-title">正在加载模型...</strong>
-            <p id="model-playback-loading-meta">加载完成前会锁定其他模型切换。</p>
+            <strong id="model-playback-loading-title">正在加载模型资源...</strong>
+            <p id="model-playback-loading-filename" class="model-playback-loading-filename">模型文件名称</p>
+            <div class="model-playback-loading-track" aria-hidden="true">
+              <div id="model-playback-loading-fill" class="model-playback-loading-fill"></div>
+            </div>
+            <div class="model-playback-loading-progress-row">
+              <span id="model-playback-loading-percent">0%</span>
+            </div>
           </div>
         </div>
 

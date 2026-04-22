@@ -11,6 +11,8 @@ import { KStereoEffect } from "/vendor/kmax/KStereoEffect.js";
 import { KStylusRaycaster } from "/vendor/kmax/KStylusRaycaster.js";
 import { WSTrack } from "/vendor/kmax/ws-track.js";
 
+THREE.Cache.enabled = true;
+
 const uploadCard = document.getElementById("upload-card");
 const fileInput = document.getElementById("model-files");
 const entryFileSelect = document.getElementById("entry-file");
@@ -78,7 +80,9 @@ const taskProgressCloseButton = document.getElementById("task-progress-close");
 const taskProgressOpenListButton = document.getElementById("task-progress-open-list");
 const modelPlaybackLoading = document.getElementById("model-playback-loading");
 const modelPlaybackLoadingTitle = document.getElementById("model-playback-loading-title");
-const modelPlaybackLoadingMeta = document.getElementById("model-playback-loading-meta");
+const modelPlaybackLoadingFilename = document.getElementById("model-playback-loading-filename");
+const modelPlaybackLoadingFill = document.getElementById("model-playback-loading-fill");
+const modelPlaybackLoadingPercent = document.getElementById("model-playback-loading-percent");
 
 const generatedTaskStorageKey = "model-preview-generated-tasks";
 const previewTaskStorageLimit = 18;
@@ -193,6 +197,8 @@ let autoPlayingGeneratedTaskId = "";
 let modelLoadRequestId = 0;
 let activePlaybackLoadingTaskId = "";
 let playbackLoadTimeoutId = null;
+let playbackLoadProgressPercent = 0;
+let playbackLoadKnownTotalBytes = 0;
 let currentModelFileSizeBytes = 0;
 let explodeParts = [];
 let explodeProgress = 0;
@@ -830,6 +836,9 @@ async function handleGeneratorSubmit() {
       mode,
       prompt: prompt || (imageFile?.name || "图片生成"),
       displayModelVersion: result.displayModelVersion || getGeneratorDefaults(provider).modelVersion,
+      textureQuality: generatorTextureQualitySelect.value,
+      geometryQuality: generatorGeometryQualitySelect.value,
+      fileSizeBytes: 0,
       status: "queued",
       statusText: "任务已创建，等待生成",
       stageText: "任务创建成功",
@@ -993,6 +1002,7 @@ function renderGeneratedTaskMarkup(task) {
   const isPlaybackLoading = activePlaybackLoadingTaskId === task.id;
   const playDisabled = !canPlay || (Boolean(activePlaybackLoadingTaskId) && !isPlaybackLoading);
   const playLabel = isPlaybackLoading ? "加载中..." : "播放模型";
+  const fileSizeLabel = Number(task.fileSizeBytes || 0) > 0 ? formatBytes(task.fileSizeBytes) : "-";
 
   return `
     <article class="model-list-item">
@@ -1006,6 +1016,7 @@ function renderGeneratedTaskMarkup(task) {
       <div class="model-list-meta">
         <span>任务 ID：${escapeHtml(task.taskId || task.id)}</span>
         <span>更新时间：${escapeHtml(timeLabel)}</span>
+        <span>文件大小：${escapeHtml(fileSizeLabel)}</span>
       </div>
       <div class="model-list-progress">
         <div class="model-list-progress-fill" style="width:${progress}%"></div>
@@ -1155,6 +1166,9 @@ async function handleGeneratedTaskUpdate(requestTaskId, provider, task) {
     providerName: task.providerName || currentTask.providerName || provider,
     mode: task.mode || currentTask.mode || "text",
     displayModelVersion: task.displayModelVersion || currentTask.displayModelVersion || "",
+    textureQuality: task.textureQuality || currentTask.textureQuality || "",
+    geometryQuality: task.geometryQuality || currentTask.geometryQuality || "",
+    fileSizeBytes: Number(task.fileSizeBytes || currentTask.fileSizeBytes || 0),
     prompt: currentTask.prompt || task.input?.prompt || currentTask.id,
     status: task.status,
     statusText: task.statusText || task.status,
@@ -1224,19 +1238,29 @@ async function playGeneratedTask(taskId) {
   }
 
   closeModal(modelListModal);
-  const assetMeta = await readRemoteAssetMetadata(playable.url);
-  beginPlaybackLoading(task, assetMeta);
+  beginPlaybackLoading(task);
+  const assetMetaPromise = readRemoteAssetMetadata(playable.url).then((assetMeta) => {
+    if (activePlaybackLoadingTaskId !== task.id) {
+      return assetMeta;
+    }
 
-  if (assetMeta.sizeBytes > 120 * 1024 * 1024) {
-    setStatus(`当前模型约 ${formatBytes(assetMeta.sizeBytes)}，加载会比较慢，请耐心等待`);
-  }
+    if (assetMeta.sizeBytes > 0) {
+      upsertGeneratedTask({
+        ...task,
+        fileSizeBytes: assetMeta.sizeBytes
+      });
+      renderGeneratedTaskList();
+    }
+    return assetMeta;
+  });
 
   try {
     const loaded = await loadRemoteModel(playable.url, {
       name: task.prompt || `${task.providerName || task.provider} 生成模型`,
       formatHint: playable.format,
       timeoutMs: MODEL_PLAYBACK_TIMEOUT_MS,
-      assetMeta
+      taskId: task.id,
+      assetMetaPromise
     });
 
     if (!loaded) {
@@ -1401,29 +1425,40 @@ async function loadRemoteModel(modelUrl, options = {}) {
   loadButton.disabled = true;
   const timeoutMs = Number(options.timeoutMs) || MODEL_PLAYBACK_TIMEOUT_MS;
   let timeoutId = null;
-  currentModelFileSizeBytes = Number(options.assetMeta?.sizeBytes || 0);
+  currentModelFileSizeBytes = 0;
 
   const modelLabel = options.name || stripExtension(getFileNameFromUrl(modelUrl)) || "远程模型";
   const formatHint = options.formatHint || inferFormatFromUrl(modelUrl);
   const proxiedUrl = buildAssetProxyUrl(modelUrl);
+  const onProgress = createRemoteProgressReporter(options.taskId);
 
   setStatus("正在加载生成结果...");
   modelName.textContent = modelLabel;
   formatStat.textContent = String(formatHint || "-").toUpperCase();
+  updatePlaybackLoadingProgress({
+    taskId: options.taskId,
+    phase: "download",
+    status: "正在加载模型资源...",
+    percent: 3
+  });
 
   try {
+    if (options.assetMetaPromise) {
+      void options.assetMetaPromise.catch(() => null);
+    }
+
     await Promise.race([
       (async () => {
         const extension = getExtension(formatHint || modelUrl);
 
         if (extension === "glb" || extension === "gltf") {
-          await loadRemoteGltf(proxiedUrl, requestId);
+          await loadRemoteGltf(proxiedUrl, requestId, onProgress);
         } else if (extension === "fbx") {
-          await loadRemoteFbx(proxiedUrl, requestId);
+          await loadRemoteFbx(proxiedUrl, requestId, onProgress);
         } else if (extension === "obj") {
-          await loadRemoteObj(proxiedUrl, requestId);
+          await loadRemoteObj(proxiedUrl, requestId, onProgress);
         } else if (extension === "stl") {
-          await loadRemoteStl(proxiedUrl, requestId);
+          await loadRemoteStl(proxiedUrl, requestId, onProgress);
         } else {
           throw new Error(`当前暂不支持直接播放 ${extension.toUpperCase()} 远程模型`);
         }
@@ -1443,6 +1478,12 @@ async function loadRemoteModel(modelUrl, options = {}) {
     currentRemoteModelUrl = modelUrl;
     applyWireframeState();
     captureStereoReferenceCamera();
+    updatePlaybackLoadingProgress({
+      taskId: options.taskId,
+      phase: "done",
+      status: "模型已完成解析，正在进入预览器...",
+      percent: 100
+    });
     setStatus("生成模型已载入预览器");
     return true;
   } catch (error) {
@@ -1497,16 +1538,17 @@ async function loadGltf(entryFile, manager, requestId) {
   updateModelStats(entryFile.name, gltf.animations?.length || 0);
 }
 
-async function loadRemoteGltf(modelUrl, requestId) {
-  const loader = new GLTFLoader();
-  const dracoLoader = new DRACOLoader();
+async function loadRemoteGltf(modelUrl, requestId, onProgress) {
+  const manager = createRemoteLoadingManager(onProgress);
+  const loader = new GLTFLoader(manager);
+  const dracoLoader = new DRACOLoader(manager);
   dracoLoader.setDecoderPath("/vendor/three/examples/jsm/libs/draco/gltf/");
   loader.setDRACOLoader(dracoLoader);
   loader.setMeshoptDecoder(MeshoptDecoder);
 
   let gltf;
   try {
-    gltf = await loader.loadAsync(modelUrl);
+    gltf = await loadWithProgress(loader, modelUrl, onProgress);
   } finally {
     dracoLoader.dispose();
   }
@@ -1548,9 +1590,9 @@ async function loadFbx(entryFile, manager, requestId) {
   updateModelStats(entryFile.name, fbx.animations?.length || 0);
 }
 
-async function loadRemoteFbx(modelUrl, requestId) {
-  const loader = new FBXLoader();
-  const fbx = await loader.loadAsync(modelUrl);
+async function loadRemoteFbx(modelUrl, requestId, onProgress) {
+  const loader = new FBXLoader(createRemoteLoadingManager(onProgress));
+  const fbx = await loadWithProgress(loader, modelUrl, onProgress);
 
   if (!isModelLoadRequestCurrent(requestId)) {
     disposeObject(fbx);
@@ -1605,9 +1647,9 @@ async function loadObj(entryFile, manager, requestId) {
   updateModelStats(entryFile.name, 0);
 }
 
-async function loadRemoteObj(modelUrl, requestId) {
-  const loader = new OBJLoader();
-  const obj = await loader.loadAsync(modelUrl);
+async function loadRemoteObj(modelUrl, requestId, onProgress) {
+  const loader = new OBJLoader(createRemoteLoadingManager(onProgress));
+  const obj = await loadWithProgress(loader, modelUrl, onProgress);
 
   if (!isModelLoadRequestCurrent(requestId)) {
     disposeObject(obj);
@@ -1656,15 +1698,26 @@ async function loadStl(entryFile, requestId) {
   updateModelStats(entryFile.name, 0);
 }
 
-async function loadRemoteStl(modelUrl, requestId) {
+async function loadRemoteStl(modelUrl, requestId, onProgress) {
   const loader = new STLLoader();
   const response = await fetch(modelUrl);
   if (!response.ok) {
     throw new Error(`无法读取远程 STL 模型 (${response.status})`);
   }
 
-  const arrayBuffer = await response.arrayBuffer();
+  const totalBytes = Number(response.headers.get("content-length") || 0);
+  if (totalBytes > 0) {
+    playbackLoadKnownTotalBytes = totalBytes;
+    currentModelFileSizeBytes = totalBytes;
+  }
+  const arrayBuffer = await readResponseArrayBufferWithProgress(response, (loadedBytes, totalHint) => {
+    onProgress?.({
+      loaded: loadedBytes,
+      total: totalHint || totalBytes
+    });
+  });
   const geometry = loader.parse(arrayBuffer);
+  onProgress?.({ stage: "parse", percent: 96, detail: "正在解析 STL 几何体..." });
   geometry.computeVertexNormals();
 
   const material = new THREE.MeshStandardMaterial({
@@ -1715,6 +1768,86 @@ function createLoadingManager() {
   };
 
   return manager;
+}
+
+function createRemoteLoadingManager(onProgress) {
+  const manager = new THREE.LoadingManager();
+
+  manager.onStart = (_url, loaded, total) => {
+    if (total > 1) {
+      onProgress?.({
+        stage: "dependencies",
+        loadedItems: loaded,
+        totalItems: total
+      });
+    }
+  };
+
+  manager.onProgress = (_url, loaded, total) => {
+    if (total > 1) {
+      onProgress?.({
+        stage: "dependencies",
+        loadedItems: loaded,
+        totalItems: total
+      });
+    }
+  };
+
+  manager.onLoad = () => {
+    onProgress?.({
+      stage: "parse",
+      percent: 98,
+      detail: "依赖资源已就绪，正在整理场景..."
+    });
+  };
+
+  return manager;
+}
+
+function loadWithProgress(loader, url, onProgress) {
+  return new Promise((resolve, reject) => {
+    loader.load(
+      url,
+      resolve,
+      (event) => onProgress?.(event),
+      reject
+    );
+  });
+}
+
+async function readResponseArrayBufferWithProgress(response, onProgress) {
+  if (!response.body || typeof response.body.getReader !== "function") {
+    const arrayBuffer = await response.arrayBuffer();
+    onProgress?.(arrayBuffer.byteLength, arrayBuffer.byteLength);
+    return arrayBuffer;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let loadedBytes = 0;
+  const totalBytes = Number(response.headers.get("content-length") || 0);
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    if (value) {
+      chunks.push(value);
+      loadedBytes += value.byteLength;
+      onProgress?.(loadedBytes, totalBytes);
+    }
+  }
+
+  const merged = new Uint8Array(loadedBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return merged.buffer;
 }
 
 function playAnimations(animations) {
@@ -1781,10 +1914,13 @@ function beginPlaybackLoading(task, assetMeta = {}) {
   }
 
   activePlaybackLoadingTaskId = task.id;
-  modelPlaybackLoadingTitle.textContent = `正在加载「${task.prompt || "3D 模型"}」`;
-  modelPlaybackLoadingMeta.textContent = assetMeta.sizeBytes
-    ? `当前文件约 ${formatBytes(assetMeta.sizeBytes)}，加载完成前会锁定其他模型切换。`
-    : "加载完成前会锁定其他模型切换，超时或失败后会自动解锁。";
+  playbackLoadProgressPercent = 0;
+  playbackLoadKnownTotalBytes = Number(assetMeta.sizeBytes || 0);
+  modelPlaybackLoadingTitle.textContent = "正在加载模型资源...";
+  const fileLabel = task.prompt || getFileNameFromUrl(task.preferredModelUrl || "") || "模型文件名称";
+  modelPlaybackLoadingFilename.textContent = `“${fileLabel}”`;
+  modelPlaybackLoadingPercent.textContent = "0%";
+  modelPlaybackLoadingFill.style.width = "0%";
   modelPlaybackLoading.classList.remove("hidden");
   renderGeneratedTaskList();
 
@@ -1805,8 +1941,90 @@ function endPlaybackLoading() {
   }
 
   activePlaybackLoadingTaskId = "";
+  playbackLoadProgressPercent = 0;
+  playbackLoadKnownTotalBytes = 0;
   modelPlaybackLoading.classList.add("hidden");
   renderGeneratedTaskList();
+}
+
+function updatePlaybackLoadingProgress({
+  taskId,
+  phase = "",
+  status = "",
+  percent,
+  loadedBytes = 0,
+  totalBytes = 0
+} = {}) {
+  if (taskId && activePlaybackLoadingTaskId && taskId !== activePlaybackLoadingTaskId) {
+    return;
+  }
+
+  if (totalBytes > 0) {
+    playbackLoadKnownTotalBytes = totalBytes;
+    currentModelFileSizeBytes = totalBytes;
+  }
+
+  let nextPercent = Number.isFinite(percent) ? clampProgress(percent) : playbackLoadProgressPercent;
+  if (!Number.isFinite(percent) && playbackLoadKnownTotalBytes > 0 && loadedBytes > 0) {
+    nextPercent = clampProgress((loadedBytes / playbackLoadKnownTotalBytes) * 88);
+  }
+  if (phase === "parse") {
+    nextPercent = Math.max(nextPercent, 92);
+  }
+  if (phase === "done") {
+    nextPercent = 100;
+  }
+
+  playbackLoadProgressPercent = Math.max(playbackLoadProgressPercent, nextPercent);
+  modelPlaybackLoadingFill.style.width = `${playbackLoadProgressPercent}%`;
+  modelPlaybackLoadingPercent.textContent = `${playbackLoadProgressPercent}%`;
+}
+
+function createRemoteProgressReporter(taskId) {
+  return (payload = {}) => {
+    if (activePlaybackLoadingTaskId !== taskId) {
+      return;
+    }
+
+    if (payload.stage === "dependencies") {
+      const loadedItems = Number(payload.loadedItems || 0);
+      const totalItems = Number(payload.totalItems || 0);
+      const ratio = totalItems > 0 ? loadedItems / totalItems : 0;
+      updatePlaybackLoadingProgress({
+        taskId,
+        phase: "parse",
+        status: "正在解析模型依赖...",
+        percent: 92 + Math.round(ratio * 6)
+      });
+      return;
+    }
+
+    if (payload.stage === "parse") {
+      updatePlaybackLoadingProgress({
+        taskId,
+        phase: "parse",
+        status: payload.detail || "正在解析模型结构...",
+        percent: payload.percent ?? 96
+      });
+      return;
+    }
+
+    const loadedBytes = Number(payload.loaded || 0);
+    const totalBytes = Number(payload.total || 0) || playbackLoadKnownTotalBytes;
+    const hasTotal = totalBytes > 0;
+    const percent = hasTotal
+      ? Math.round((Math.min(loadedBytes, totalBytes) / totalBytes) * 88)
+      : Math.min(88, Math.max(playbackLoadProgressPercent, 6));
+
+      updatePlaybackLoadingProgress({
+        taskId,
+        phase: "download",
+        status: "正在加载模型资源...",
+        loadedBytes,
+        totalBytes,
+        percent
+    });
+  };
 }
 
 async function readRemoteAssetMetadata(url) {
@@ -3469,6 +3687,7 @@ function inferFormatFromUrl(url) {
 function buildAssetProxyUrl(url) {
   return `/api/asset?url=${encodeURIComponent(url)}`;
 }
+
 
 function sanitizeDownloadName(value) {
   return String(value || "generated-model")

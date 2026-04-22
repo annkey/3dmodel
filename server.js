@@ -699,7 +699,8 @@ async function handleAssetProxy(req, res, requestUrl) {
   const response = await fetch(targetUrl, {
     method: req.method === "HEAD" ? "HEAD" : "GET",
     headers: {
-      Accept: "*/*"
+      Accept: "*/*",
+      ...(req.headers.range ? { Range: req.headers.range } : {})
     }
   });
 
@@ -715,10 +716,14 @@ async function handleAssetProxy(req, res, requestUrl) {
   const ext = path.extname(fileName).toLowerCase();
   const contentType = response.headers.get("content-type") || inferAssetContentType(ext);
   const contentLength = response.headers.get("content-length");
+  const contentRange = response.headers.get("content-range");
+  const etag = response.headers.get("etag");
+  const lastModified = response.headers.get("last-modified");
+  const acceptRanges = response.headers.get("accept-ranges");
 
   const headers = {
     "Content-Type": contentType,
-    "Cache-Control": "no-store, max-age=0",
+    "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
     "Content-Disposition": `inline; filename="${fileName || "asset"}"`
   };
 
@@ -726,7 +731,23 @@ async function handleAssetProxy(req, res, requestUrl) {
     headers["Content-Length"] = contentLength;
   }
 
-  res.writeHead(200, headers);
+  if (contentRange) {
+    headers["Content-Range"] = contentRange;
+  }
+
+  if (etag) {
+    headers["ETag"] = etag;
+  }
+
+  if (lastModified) {
+    headers["Last-Modified"] = lastModified;
+  }
+
+  if (acceptRanges) {
+    headers["Accept-Ranges"] = acceptRanges;
+  }
+
+  res.writeHead(response.status, headers);
 
   if (req.method === "HEAD") {
     res.end();
