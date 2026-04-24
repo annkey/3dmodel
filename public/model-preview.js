@@ -69,6 +69,7 @@ const explodeStrengthInput = document.getElementById("explode-strength");
 const panoramaTrigger = document.getElementById("panorama-trigger");
 const panoramaFileInput = document.getElementById("panorama-file");
 const stereoButton = document.getElementById("toggle-stereo-3d");
+const interactionModeButton = document.createElement("button");
 const fullscreenButton = document.getElementById("toggle-fullscreen");
 const exportButton = document.getElementById("export-image");
 const submodelSelect = document.getElementById("submodel-select");
@@ -148,6 +149,12 @@ const modelPlaybackLoadingFill = document.getElementById("model-playback-loading
 const modelPlaybackLoadingPercent = document.getElementById("model-playback-loading-percent");
 const localModelPickerTriggers = Array.from(document.querySelectorAll('[for="model-files"]'));
 
+interactionModeButton.id = "toggle-interaction-mode";
+interactionModeButton.type = "button";
+interactionModeButton.className = "tool-btn";
+interactionModeButton.innerHTML = '<span aria-hidden="true">&#11020;</span>';
+stereoButton?.insertAdjacentElement("afterend", interactionModeButton);
+
 const resourceMap = new Map();
 
 let currentObject = null;
@@ -163,16 +170,13 @@ let stylusRaycaster = null;
 let stereoTrackingData = null;
 let stereoBaseCameraPosition = null;
 let stereoBaseTarget = new THREE.Vector3();
-let isPointerModelRotating = false;
-let activePointerId = null;
-let pointerStart = { x: 0, y: 0 };
-let modelRotationOnPointerStart = new THREE.Euler(0, 0, 0, "YXZ");
 let lastPenPose = null;
 let wasPenPressed = false;
 let smoothedEyeOffset = new THREE.Vector3();
 let lastStylusIntersections = [];
 let isPenGrabbingModel = false;
 let isPenGrabbingExplodePart = false;
+let penInteractionMode = "";
 let penGrabbedExplodePart = null;
 let penGrabStartPose = null;
 let penGrabStartPosition = new THREE.Vector3();
@@ -184,6 +188,7 @@ let penExplodePartGrabHitPointLocal = null;
 let penExplodePartGrabStartPose = null;
 const penExplodePartGrabStartStylusLocal = new THREE.Vector3();
 const penExplodePartGrabStartDragOffset = new THREE.Vector3();
+let penDragStartStylusPose = null;
 let currentObjectSource = "local";
 let currentRemoteModelUrl = "";
 let currentPanoramaTexture = null;
@@ -209,27 +214,14 @@ let explodeProgress = 0;
 let explodeTarget = 0;
 let explodeMode = "none";
 let explodeIntensity = 0.65;
+let interactionMode = "whole";
 let selectedExplodePart = null;
 let selectedExplodeSourceMaterials = null;
-let selectedExplodeSourceScale = null;
 const pointerSelectionRaycaster = new THREE.Raycaster();
 const pointerSelectionCoords = new THREE.Vector2();
 let pointerDownScreen = null;
-let isDraggingSelectedPart = false;
-let draggingExplodePart = null;
 let suppressNextViewerClick = false;
-let selectedPartDragStartScreen = null;
-const selectedPartDragStartOffsetWorld = new THREE.Vector3();
-const selectedPartDragCameraRight = new THREE.Vector3();
-const selectedPartDragCameraUp = new THREE.Vector3();
-const selectedPartDragPullDirection = new THREE.Vector3();
-let isDraggingWholeModelPointer = false;
-let wholeModelDragPointerId = null;
-let wholeModelDragStartScreen = null;
-const wholeModelDragStartPosition = new THREE.Vector3();
-const wholeModelDragCameraRightLocal = new THREE.Vector3();
-const wholeModelDragCameraUpLocal = new THREE.Vector3();
-let wholeModelDragScreenScale = 0.002;
+let activePointerManipulation = null;
 
 const MODEL_PLAYBACK_TIMEOUT_MS = 120000;
 const EXPLODE_DISTANCE_SCALE = 0.32;
@@ -511,6 +503,7 @@ async function bootstrap() {
   explodeButton?.addEventListener("click", toggleExplodedView);
   explodeStrengthInput?.addEventListener("input", handleExplodeStrengthInput);
   stereoButton.addEventListener("click", toggleStereoMode);
+  interactionModeButton.addEventListener("click", toggleInteractionMode);
   fullscreenButton.addEventListener("click", () => void toggleFullscreen());
   exportButton.addEventListener("click", exportPng);
   submodelSelect?.addEventListener("change", () => {
@@ -561,6 +554,8 @@ async function bootstrap() {
   renderer.domElement.addEventListener("pointermove", handleViewerPointerMove);
   renderer.domElement.addEventListener("pointerup", handleViewerPointerUp);
   renderer.domElement.addEventListener("click", handleViewerClick);
+  renderer.domElement.addEventListener("wheel", handleViewerWheel, { passive: false });
+  renderer.domElement.addEventListener("contextmenu", handleViewerContextMenu);
   renderer.domElement.addEventListener("pointercancel", handleViewerPointerUp);
   renderer.domElement.addEventListener("lostpointercapture", handleViewerPointerUp);
   window.addEventListener("kmax-module-ready", () => {
@@ -589,6 +584,7 @@ async function bootstrap() {
   if (themeSelect.value === "panorama") {
     await ensureDefaultPanoramaLoaded();
   }
+  updateInteractionModeButton();
   applyTheme(themeSelect.value);
   updateLightStrength(Number(lightRange.value || 1.4));
   explodeIntensity = THREE.MathUtils.clamp(Number(explodeStrengthInput?.value || 65) / 100, 0, 1);
@@ -2232,6 +2228,7 @@ function playAnimations(animations) {
 }
 
 function clearCurrentObject() {
+  stopPointerManipulation();
   resetExplodedView(true);
   clearSelectedExplodePart();
 
@@ -2241,6 +2238,7 @@ function clearCurrentObject() {
     currentRemoteModelUrl = "";
     currentModelFileSizeBytes = 0;
     updateExplodeButton();
+    updateInteractionModeButton();
     syncOptimizerFormState();
     return;
   }
@@ -2254,6 +2252,7 @@ function clearCurrentObject() {
   currentModelFileSizeBytes = 0;
   resetStereoSceneFit();
   updateExplodeButton();
+  updateInteractionModeButton();
   syncOptimizerFormState();
 }
 
@@ -2529,6 +2528,16 @@ function collectExplodableParts(object) {
     return [];
   }
 
+  const previousPartState = new Map(
+    explodeParts.map((part) => [
+      part.id,
+      {
+        dragOffset: part.dragOffset.clone(),
+        scaleFactor: Number(part.scaleFactor) || 1
+      }
+    ])
+  );
+
   const rootBox = new THREE.Box3().setFromObject(object);
   if (rootBox.isEmpty()) {
     return [];
@@ -2573,9 +2582,11 @@ function collectExplodableParts(object) {
         id: mesh.uuid,
         object: mesh,
         basePosition: mesh.position.clone(),
+        baseScale: mesh.scale.clone(),
         direction: directionLocal,
         distance,
-        dragOffset: new THREE.Vector3()
+        dragOffset: previousPartState.get(mesh.uuid)?.dragOffset || new THREE.Vector3(),
+        scaleFactor: previousPartState.get(mesh.uuid)?.scaleFactor || 1
       };
     })
     .filter(Boolean);
@@ -2584,12 +2595,15 @@ function collectExplodableParts(object) {
 function syncExplodeParts() {
   explodeParts = collectExplodableParts(currentObject);
   if (explodeParts.length <= 1) {
+    clearSelectedExplodePart();
     explodeMode = "none";
     explodeTarget = 0;
     explodeProgress = 0;
+    setInteractionMode("whole", { silent: true });
   }
   applyExplodedLayout();
   updateExplodeButton();
+  updateInteractionModeButton();
   updateExplodeStrengthVisibility();
 }
 
@@ -2607,6 +2621,7 @@ function applyExplodedLayout() {
       .copy(part.basePosition)
       .addScaledVector(part.direction, part.distance * factor)
       .add(part.dragOffset);
+    applyExplodePartScale(part);
   }
 
   currentObject?.updateMatrixWorld(true);
@@ -2674,31 +2689,26 @@ function hasMultipleExplodableParts() {
   return explodeParts.length > 1;
 }
 
-function stopSelectedPartDrag() {
-  if (!isDraggingSelectedPart) {
+function applyExplodePartScale(part) {
+  if (!part?.object || !part.baseScale) {
     return;
   }
 
-  isDraggingSelectedPart = false;
-  draggingExplodePart = null;
-  selectedPartDragStartScreen = null;
-  controls.enabled = true;
+  const selectedMultiplier = selectedExplodePart?.id === part.id ? 1.015 : 1;
+  const scaleFactor = THREE.MathUtils.clamp(Number(part.scaleFactor) || 1, 0.35, 3.5) * selectedMultiplier;
+  part.object.scale.copy(part.baseScale).multiplyScalar(scaleFactor);
 }
 
-function stopWholeModelPointerDrag() {
-  if (!isDraggingWholeModelPointer) {
+function stopPointerManipulation() {
+  if (!activePointerManipulation) {
     return;
   }
 
-  isDraggingWholeModelPointer = false;
-  wholeModelDragPointerId = null;
-  wholeModelDragStartScreen = null;
+  activePointerManipulation = null;
   controls.enabled = !isStereoInteractive();
 }
 
 function clearSelectedExplodePart() {
-  stopSelectedPartDrag();
-
   if (!selectedExplodePart) {
     return;
   }
@@ -2709,13 +2719,8 @@ function clearSelectedExplodePart() {
     selectedExplodePart.object.material = selectedExplodeSourceMaterials;
   }
 
-  if (selectedExplodeSourceScale) {
-    selectedExplodePart.object.scale.copy(selectedExplodeSourceScale);
-  }
-
   selectedExplodePart = null;
   selectedExplodeSourceMaterials = null;
-  selectedExplodeSourceScale = null;
   applyExplodedLayout();
 }
 
@@ -2727,7 +2732,6 @@ function highlightExplodePart(part) {
   clearSelectedExplodePart();
   selectedExplodePart = part;
   selectedExplodeSourceMaterials = part.object.material;
-  selectedExplodeSourceScale = part.object.scale.clone();
 
   const sourceMaterials = Array.isArray(part.object.material) ? part.object.material : [part.object.material];
   const highlightedMaterials = sourceMaterials.map((material) => {
@@ -2750,7 +2754,7 @@ function highlightExplodePart(part) {
   });
 
   part.object.material = Array.isArray(part.object.material) ? highlightedMaterials : highlightedMaterials[0];
-  part.object.scale.copy(selectedExplodeSourceScale).multiplyScalar(1.015);
+  applyExplodePartScale(part);
 }
 
 function activateSingleExplodePart(part, statusMessage) {
@@ -2778,21 +2782,20 @@ function findExplodePartByMesh(mesh) {
   return explodeParts.find((part) => part.object === mesh) || null;
 }
 
+function getPointerMeshHit(event, activeCamera = getPrimaryCamera()) {
+  if (!currentObject || !updatePointerSelectionRay(event, activeCamera)) {
+    return null;
+  }
+
+  return pointerSelectionRaycaster.intersectObjects(getCurrentModelMeshes(), false)[0] || null;
+}
+
 function pickExplodePartFromPointer(event) {
   if (!currentObject || !hasMultipleExplodableParts()) {
     return null;
   }
 
-  if (!updatePointerSelectionRay(event, camera)) {
-    return null;
-  }
-
-  const hits = pointerSelectionRaycaster.intersectObjects(getCurrentModelMeshes(), false);
-  if (!hits.length) {
-    return null;
-  }
-
-  return findExplodePartByMesh(hits[0].object);
+  return findExplodePartByMesh(getPointerMeshHit(event)?.object) || null;
 }
 
 function getPrimaryCamera() {
@@ -2811,98 +2814,145 @@ function updatePointerSelectionRay(event, activeCamera = getPrimaryCamera()) {
   return true;
 }
 
-function beginWholeModelPointerDrag(event) {
-  if (!currentObject || event.button !== 0 || !event.shiftKey) {
+function getCameraAxesInLocalSpace(targetParent = previewRoot, activeCamera = getPrimaryCamera()) {
+  const rightWorld = new THREE.Vector3();
+  const upWorld = new THREE.Vector3();
+  activeCamera.matrixWorld.extractBasis(rightWorld, upWorld, new THREE.Vector3());
+
+  const targetParentWorldQuaternion = targetParent.getWorldQuaternion(new THREE.Quaternion());
+  const inverse = targetParentWorldQuaternion.invert();
+
+  return {
+    right: rightWorld.applyQuaternion(inverse).normalize(),
+    up: upWorld.applyQuaternion(inverse).normalize()
+  };
+}
+
+function beginWholeModelPointerManipulation(event) {
+  if (!currentObject || !getPointerMeshHit(event)) {
     return false;
   }
 
   const activeCamera = getPrimaryCamera();
-  const previewRootWorldQuaternion = previewRoot.getWorldQuaternion(new THREE.Quaternion());
-  const previewRootWorldQuaternionInverse = previewRootWorldQuaternion.clone().invert();
-  const cameraRight = new THREE.Vector3();
-  const cameraUp = new THREE.Vector3();
-  activeCamera.matrixWorld.extractBasis(cameraRight, cameraUp, new THREE.Vector3());
-
+  const cameraAxes = getCameraAxesInLocalSpace(previewRoot, activeCamera);
   const objectSize = new THREE.Box3().setFromObject(currentObject).getSize(new THREE.Vector3()).length() || 1;
-  wholeModelDragScreenScale = Math.max(objectSize * 0.0018, 0.003);
-  wholeModelDragStartScreen = { x: event.clientX, y: event.clientY };
-  wholeModelDragStartPosition.copy(currentObject.position);
-  wholeModelDragCameraRightLocal.copy(cameraRight.applyQuaternion(previewRootWorldQuaternionInverse).normalize());
-  wholeModelDragCameraUpLocal.copy(cameraUp.applyQuaternion(previewRootWorldQuaternionInverse).normalize());
-  isDraggingWholeModelPointer = true;
-  wholeModelDragPointerId = event.pointerId;
+  activePointerManipulation = {
+    kind: "whole",
+    pointerId: event.pointerId,
+    mode: event.button === 2 || event.button === 1 ? "translate" : "rotate",
+    startScreen: { x: event.clientX, y: event.clientY },
+    startPosition: currentObject.position.clone(),
+    startQuaternion: currentObject.quaternion.clone(),
+    rightAxis: cameraAxes.right,
+    upAxis: cameraAxes.up,
+    screenScale: Math.max(objectSize * 0.0018, 0.003)
+  };
   controls.enabled = false;
   renderer.domElement.setPointerCapture?.(event.pointerId);
-  setStatus("正在拖拽整体模型，松开可继续旋转场景");
+  setStatus(activePointerManipulation.mode === "translate"
+    ? "模型整体平移中：拖拽可移动位置"
+    : "模型整体旋转中：拖拽可调整朝向");
   return true;
 }
 
-function updateWholeModelPointerDrag(event) {
-  if (!isDraggingWholeModelPointer || !currentObject) {
+function updateWholeModelPointerManipulation(event) {
+  if (!activePointerManipulation || activePointerManipulation.kind !== "whole" || !currentObject) {
     return false;
   }
 
-  if (wholeModelDragPointerId !== null && event.pointerId !== undefined && wholeModelDragPointerId !== event.pointerId) {
+  if (activePointerManipulation.pointerId !== null && event.pointerId !== undefined && activePointerManipulation.pointerId !== event.pointerId) {
     return false;
   }
 
-  const deltaX = event.clientX - wholeModelDragStartScreen.x;
-  const deltaY = event.clientY - wholeModelDragStartScreen.y;
-  currentObject.position.copy(wholeModelDragStartPosition)
-    .addScaledVector(wholeModelDragCameraRightLocal, deltaX * wholeModelDragScreenScale)
-    .addScaledVector(wholeModelDragCameraUpLocal, -deltaY * wholeModelDragScreenScale);
-  captureStereoReferenceCamera();
+  const deltaX = event.clientX - activePointerManipulation.startScreen.x;
+  const deltaY = event.clientY - activePointerManipulation.startScreen.y;
+
+  if (activePointerManipulation.mode === "translate") {
+    currentObject.position.copy(activePointerManipulation.startPosition)
+      .addScaledVector(activePointerManipulation.rightAxis, deltaX * activePointerManipulation.screenScale)
+      .addScaledVector(activePointerManipulation.upAxis, -deltaY * activePointerManipulation.screenScale);
+    return true;
+  }
+
+  const yawRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), deltaX * 0.008);
+  const pitchRotation = new THREE.Quaternion().setFromAxisAngle(activePointerManipulation.rightAxis, deltaY * 0.008);
+  currentObject.quaternion.copy(activePointerManipulation.startQuaternion);
+  currentObject.quaternion.premultiply(yawRotation);
+  currentObject.quaternion.premultiply(pitchRotation);
   return true;
 }
 
-function beginSelectedPartDrag(event) {
-  if (isStereoInteractive() || event.button !== 0 || !selectedExplodePart) {
+function beginSelectedPartManipulation(event) {
+  if (!hasMultipleExplodableParts()) {
     return false;
   }
 
   const pickedPart = pickExplodePartFromPointer(event);
-  if (!pickedPart || pickedPart.id !== selectedExplodePart.id) {
+  if (!pickedPart) {
     return false;
   }
 
-  selectedPartDragStartScreen = { x: event.clientX, y: event.clientY };
-  const parentQuaternion = selectedExplodePart.object.parent
-    ? selectedExplodePart.object.parent.getWorldQuaternion(new THREE.Quaternion())
-    : new THREE.Quaternion();
-  selectedPartDragStartOffsetWorld.copy(selectedExplodePart.dragOffset).applyQuaternion(parentQuaternion);
-  camera.matrixWorld.extractBasis(selectedPartDragCameraRight, selectedPartDragCameraUp, new THREE.Vector3());
-  selectedPartDragCameraRight.normalize();
-  selectedPartDragCameraUp.normalize();
-  selectedPartDragPullDirection.copy(selectedExplodePart.direction).applyQuaternion(parentQuaternion).normalize();
-  isDraggingSelectedPart = true;
-  draggingExplodePart = selectedExplodePart;
+  if (selectedExplodePart?.id !== pickedPart.id) {
+    activateSingleExplodePart(pickedPart, "已切换到当前子结构，继续拖拽可直接操作");
+  }
+
+  const interactionPart = selectedExplodePart || pickedPart;
+  const parent = interactionPart.object.parent || previewRoot;
+  const activeCamera = getPrimaryCamera();
+  const cameraAxes = getCameraAxesInLocalSpace(parent, activeCamera);
+  const partSize = new THREE.Box3().setFromObject(interactionPart.object).getSize(new THREE.Vector3()).length()
+    || interactionPart.distance
+    || 1;
+  activePointerManipulation = {
+    kind: "part",
+    pointerId: event.pointerId,
+    mode: event.button === 2 || event.button === 1 ? "translate" : "rotate",
+    targetPart: interactionPart,
+    startScreen: { x: event.clientX, y: event.clientY },
+    startQuaternion: interactionPart.object.quaternion.clone(),
+    startDragOffset: interactionPart.dragOffset.clone(),
+    rightAxis: cameraAxes.right,
+    upAxis: cameraAxes.up,
+    screenScale: Math.max(partSize * 0.0022, 0.0025)
+  };
   controls.enabled = false;
   renderer.domElement.setPointerCapture?.(event.pointerId);
-  setStatus("已进入子结构拖拽观察，向上拖可拉出，左右可微调");
+  setStatus(activePointerManipulation.mode === "translate"
+    ? "子结构平移中：拖拽可移动当前零件"
+    : "子结构旋转中：拖拽可调整当前零件");
   return true;
 }
 
-function updateSelectedPartDrag(event) {
-  if (!isDraggingSelectedPart || !draggingExplodePart || !selectedPartDragStartScreen) {
+function updateSelectedPartManipulation(event) {
+  if (!activePointerManipulation || activePointerManipulation.kind !== "part") {
     return false;
   }
 
-  const deltaX = event.clientX - selectedPartDragStartScreen.x;
-  const deltaY = event.clientY - selectedPartDragStartScreen.y;
-  const pullStrength = Math.max(draggingExplodePart.distance * 0.02, 0.01);
-  const screenAdjustStrength = Math.max(draggingExplodePart.distance * 0.0045, 0.0025);
-  const worldOffset = selectedPartDragStartOffsetWorld.clone()
-    .addScaledVector(selectedPartDragPullDirection, Math.max(0, -deltaY) * pullStrength)
-    .addScaledVector(selectedPartDragCameraRight, deltaX * screenAdjustStrength)
-    .addScaledVector(selectedPartDragCameraUp, -deltaY * screenAdjustStrength * 0.4);
+  if (activePointerManipulation.pointerId !== null && event.pointerId !== undefined && activePointerManipulation.pointerId !== event.pointerId) {
+    return false;
+  }
 
-  const parentQuaternion = draggingExplodePart.object.parent
-    ? draggingExplodePart.object.parent.getWorldQuaternion(new THREE.Quaternion())
-    : new THREE.Quaternion();
-  const localOffset = worldOffset.applyQuaternion(parentQuaternion.invert());
+  const targetPart = activePointerManipulation.targetPart;
+  if (!targetPart?.object) {
+    return false;
+  }
 
-  draggingExplodePart.dragOffset.copy(localOffset);
-  applyExplodedLayout();
+  const deltaX = event.clientX - activePointerManipulation.startScreen.x;
+  const deltaY = event.clientY - activePointerManipulation.startScreen.y;
+
+  if (activePointerManipulation.mode === "translate") {
+    targetPart.dragOffset.copy(activePointerManipulation.startDragOffset)
+      .addScaledVector(activePointerManipulation.rightAxis, deltaX * activePointerManipulation.screenScale)
+      .addScaledVector(activePointerManipulation.upAxis, -deltaY * activePointerManipulation.screenScale);
+    applyExplodedLayout();
+    return true;
+  }
+
+  const yawRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), deltaX * 0.008);
+  const pitchRotation = new THREE.Quaternion().setFromAxisAngle(activePointerManipulation.rightAxis, deltaY * 0.008);
+  targetPart.object.quaternion.copy(activePointerManipulation.startQuaternion);
+  targetPart.object.quaternion.premultiply(yawRotation);
+  targetPart.object.quaternion.premultiply(pitchRotation);
   return true;
 }
 
@@ -3316,6 +3366,56 @@ function updateGridButton() {
   setToolLabel(gridButton, `地面网格：${isGridVisible ? "开" : "关"}`);
 }
 
+function setInteractionMode(mode, options = {}) {
+  const nextMode = mode === "part" ? "part" : "whole";
+  interactionMode = nextMode;
+
+  if (nextMode === "whole" && selectedExplodePart) {
+    clearSelectedExplodePart();
+    if (explodeMode === "single") {
+      explodeMode = "none";
+      explodeTarget = 0;
+    }
+    updateExplodeButton();
+  }
+
+  updateInteractionModeButton();
+
+  if (options.silent) {
+    return;
+  }
+
+  if (nextMode === "whole") {
+    setStatus("已切换到模型整体交互：左键旋转，右键拖动，滚轮缩放");
+    return;
+  }
+
+  if (!currentObject) {
+    setStatus("已切换到子结构交互，加载模型后可直接操作单个结构");
+    return;
+  }
+
+  if (!hasMultipleExplodableParts()) {
+    setStatus("已切换到子结构交互，但当前模型没有可独立操作的子结构");
+    return;
+  }
+
+  setStatus("已切换到子结构交互：左键旋转单体，右键拖动，滚轮缩放");
+}
+
+function toggleInteractionMode() {
+  setInteractionMode(interactionMode === "whole" ? "part" : "whole");
+}
+
+function updateInteractionModeButton() {
+  const available = hasMultipleExplodableParts();
+  const isPartMode = interactionMode === "part";
+  interactionModeButton.classList.toggle("hidden", !available);
+  interactionModeButton.classList.toggle("active", isPartMode);
+  interactionModeButton.querySelector("span").innerHTML = isPartMode ? "&#11017;" : "&#11020;";
+  setToolLabel(interactionModeButton, `交互模式：${isPartMode ? "子结构" : "模型整体"}`);
+}
+
 function toggleExplodedView() {
   if (!currentObject) {
     setStatus("请先加载模型");
@@ -3353,6 +3453,7 @@ function updateExplodeButton() {
   const active = explodeMode === "all" && (explodeTarget > 0 || explodeProgress > 0.01);
   const singleSelected = explodeMode === "single" && selectedExplodePart;
 
+  explodeButton.classList.toggle("hidden", !available);
   explodeButton.disabled = !hasModel;
   explodeButton.classList.toggle("active", active);
 
@@ -3471,6 +3572,7 @@ function maybeActivateStereoDisplay() {
   }
 
   isStereoDisplayActive = true;
+  stopPointerManipulation();
   controls.enabled = false;
   updateStereoSceneFit();
   syncStereoRuntimeParams();
@@ -3485,6 +3587,7 @@ function maybeActivateStereoDisplay() {
 
 function deactivateStereoDisplay() {
   if (!isStereoDisplayActive) {
+    stopPointerManipulation();
     controls.enabled = true;
     resetStereoSceneFit();
     resetPenInteractionState();
@@ -3494,13 +3597,12 @@ function deactivateStereoDisplay() {
       stylusRaycaster.helper.visible = false;
     }
     smoothedEyeOffset.set(0, 0, 0);
-    isPointerModelRotating = false;
-    activePointerId = null;
     updateStereoButton();
     return;
   }
 
   isStereoDisplayActive = false;
+  stopPointerManipulation();
   controls.enabled = true;
 
   try {
@@ -3515,8 +3617,6 @@ function deactivateStereoDisplay() {
     stylusRaycaster.helper.visible = false;
   }
   smoothedEyeOffset.set(0, 0, 0);
-  isPointerModelRotating = false;
-  activePointerId = null;
 
   updateStereoButton();
 }
@@ -3572,75 +3672,94 @@ function isStereoInteractive() {
 function handleViewerPointerDown(event) {
   pointerDownScreen = { x: event.clientX, y: event.clientY };
 
-  if (beginWholeModelPointerDrag(event)) {
+  if (!currentObject || (event.button !== 0 && event.button !== 1 && event.button !== 2)) {
+    return;
+  }
+
+  if (interactionMode === "part" && !hasMultipleExplodableParts()) {
+    setStatus("当前模型没有可独立交互的子结构，可切回模型整体交互");
+    return;
+  }
+
+  const started = interactionMode === "part"
+    ? beginSelectedPartManipulation(event)
+    : beginWholeModelPointerManipulation(event);
+
+  if (started) {
     suppressNextViewerClick = true;
     return;
   }
-
-  if (beginSelectedPartDrag(event)) {
-    suppressNextViewerClick = true;
-    return;
-  }
-
-  if (!isStereoInteractive() || event.button !== 0) {
-    return;
-  }
-
-  isPointerModelRotating = true;
-  activePointerId = event.pointerId;
-  pointerStart = { x: event.clientX, y: event.clientY };
-  modelRotationOnPointerStart.copy(currentObject.rotation);
-  renderer.domElement.setPointerCapture?.(event.pointerId);
-  setStatus("裸眼 3D 交互中：拖拽可旋转模型");
 }
 
 function handleViewerPointerMove(event) {
-  if (updateWholeModelPointerDrag(event)) {
+  if (updateWholeModelPointerManipulation(event)) {
     return;
   }
 
-  if (updateSelectedPartDrag(event)) {
-    return;
-  }
-
-  if (!isPointerModelRotating || activePointerId !== event.pointerId || !currentObject) {
-    return;
-  }
-
-  const deltaX = event.clientX - pointerStart.x;
-  const deltaY = event.clientY - pointerStart.y;
-  const rotationSpeed = 0.008;
-
-  currentObject.rotation.order = "YXZ";
-  currentObject.rotation.y = modelRotationOnPointerStart.y + deltaX * rotationSpeed;
-  currentObject.rotation.x = THREE.MathUtils.clamp(
-    modelRotationOnPointerStart.x + deltaY * rotationSpeed,
-    -Math.PI / 2,
-    Math.PI / 2
-  );
+  updateSelectedPartManipulation(event);
 }
 
 function handleViewerPointerUp(event) {
-  if (isDraggingWholeModelPointer) {
-    stopWholeModelPointerDrag();
+  if (activePointerManipulation?.pointerId !== null
+    && event.pointerId !== undefined
+    && activePointerManipulation.pointerId !== event.pointerId) {
     return;
   }
 
-  if (isDraggingSelectedPart) {
-    stopSelectedPartDrag();
+  stopPointerManipulation();
+}
+
+function handleViewerContextMenu(event) {
+  if (currentObject) {
+    event.preventDefault();
+  }
+}
+
+function handleViewerWheel(event) {
+  if (!currentObject) {
     return;
   }
 
-  if (activePointerId !== null && event.pointerId !== undefined && activePointerId !== event.pointerId) {
+  const scaleDelta = THREE.MathUtils.clamp(Math.exp(-event.deltaY * 0.0012), 0.85, 1.18);
+
+  if (interactionMode === "part") {
+    if (!hasMultipleExplodableParts()) {
+      event.preventDefault();
+      setStatus("当前模型没有可独立交互的子结构，可切回模型整体交互");
+      return;
+    }
+
+    const hoveredPart = pickExplodePartFromPointer(event);
+    const stylusPart = isStereoInteractive() ? getExplodePartFromStylusIntersections() : null;
+    const targetPart = hoveredPart || selectedExplodePart || stylusPart;
+    if (!targetPart) {
+      return;
+    }
+
+    if (selectedExplodePart?.id !== targetPart.id) {
+      activateSingleExplodePart(targetPart, "已选中子结构，滚轮可继续缩放当前零件");
+    }
+
+    targetPart.scaleFactor = THREE.MathUtils.clamp((Number(targetPart.scaleFactor) || 1) * scaleDelta, 0.45, 3.5);
+    applyExplodePartScale(targetPart);
+    event.preventDefault();
+    setStatus(`子结构缩放已调整为 ${Math.round(targetPart.scaleFactor * 100)}%`);
     return;
   }
 
-  isPointerModelRotating = false;
-  activePointerId = null;
+  if (!isStereoInteractive() && !getPointerMeshHit(event)) {
+    return;
+  }
+
+  const currentScale = currentObject.scale.length() / Math.sqrt(3);
+  const nextScale = THREE.MathUtils.clamp(currentScale * scaleDelta, 0.12, 8);
+  currentObject.scale.multiplyScalar(nextScale / Math.max(currentScale, 1e-6));
+  event.preventDefault();
+  setStatus(`模型整体缩放已调整为 ${Math.round(nextScale * 100)}%`);
 }
 
 function handleViewerClick(event) {
-  if (isStereoInteractive() || !currentObject) {
+  if (!currentObject) {
     return;
   }
 
@@ -3655,6 +3774,23 @@ function handleViewerClick(event) {
     if (moved > 6) {
       return;
     }
+  }
+
+  if (interactionMode !== "part") {
+    if (selectedExplodePart) {
+      clearSelectedExplodePart();
+      if (explodeMode === "single") {
+        explodeMode = "none";
+        explodeTarget = 0;
+      }
+      updateExplodeButton();
+    }
+    return;
+  }
+
+  if (!hasMultipleExplodableParts()) {
+    setStatus("当前模型没有可独立交互的子结构，可切回模型整体交互");
+    return;
   }
 
   const pickedPart = pickExplodePartFromPointer(event);
@@ -3690,12 +3826,14 @@ function resetPenInteractionState() {
   wasPenPressed = false;
   isPenGrabbingModel = false;
   isPenGrabbingExplodePart = false;
+  penInteractionMode = "";
   penGrabbedExplodePart = null;
   penGrabStartPose = null;
   penGrabStartRotation = null;
   penGrabHitPointLocal = null;
   penExplodePartGrabHitPointLocal = null;
   penExplodePartGrabStartPose = null;
+  penDragStartStylusPose = null;
   penExplodePartGrabStartStylusLocal.set(0, 0, 0);
   penExplodePartGrabStartDragOffset.set(0, 0, 0);
 }
@@ -3777,6 +3915,23 @@ function getStylusPoseInPreviewRoot() {
   };
 }
 
+function getStylusPoseInObjectParent(object) {
+  if (!stylusRaycaster || !object) {
+    return null;
+  }
+
+  const parent = object.parent || previewRoot;
+  const localPosition = parent.worldToLocal(stylusRaycaster.line.position.clone());
+  const parentWorldQuaternion = parent.getWorldQuaternion(new THREE.Quaternion());
+  const lineWorldQuaternion = stylusRaycaster.line.getWorldQuaternion(new THREE.Quaternion());
+  const localQuaternion = parentWorldQuaternion.invert().multiply(lineWorldQuaternion);
+
+  return {
+    position: localPosition,
+    quaternion: localQuaternion
+  };
+}
+
 function getStylusPositionInObjectParent(object) {
   if (!stylusRaycaster || !object?.parent) {
     return null;
@@ -3793,28 +3948,42 @@ function getExplodePartFromStylusIntersections() {
   return findExplodePartByMesh(lastStylusIntersections[0].object);
 }
 
-function beginPenExplodePartGrab(pen, part) {
+function getPenInteractionMode(penKey) {
+  const key = Number(penKey || 0);
+  if ((key & 1) === 1 || (key & 2) === 2 || (key & 4) === 4 || key === 1 || key === 2 || key === 4) {
+    return "transform";
+  }
+  return "";
+}
+
+function beginPenExplodePartGrab(pen, part, mode) {
   if (!part?.object || !lastStylusIntersections.length) {
     return false;
   }
 
-  const stylusLocal = getStylusPositionInObjectParent(part.object);
-  if (!stylusLocal) {
+  const stylusPose = getStylusPoseInObjectParent(part.object);
+  if (!stylusPose) {
     return false;
   }
 
+  penInteractionMode = mode;
   penExplodePartGrabStartPose = {
     x: pen.pos.x,
     y: pen.pos.y,
     z: pen.pos.z
   };
-  penExplodePartGrabStartStylusLocal.copy(stylusLocal);
+  penDragStartStylusPose = {
+    position: stylusPose.position.clone(),
+    quaternion: stylusPose.quaternion.clone()
+  };
+  penExplodePartGrabStartStylusLocal.copy(stylusPose.position);
   penExplodePartGrabStartDragOffset.copy(part.dragOffset);
   penExplodePartGrabHitPointLocal = part.object.worldToLocal(lastStylusIntersections[0].point.clone());
   penGrabbedExplodePart = part;
   isPenGrabbingExplodePart = true;
   isPenGrabbingModel = false;
-  setStatus("笔已抓住子结构：可拖拽当前零件做立体观察");
+  penGrabStartQuaternion.copy(part.object.quaternion);
+  setStatus("笔已抓住子结构：主键或左键空间拖拽可同时旋转和平移，缩放可用鼠标滚轮");
   return true;
 }
 
@@ -3823,26 +3992,28 @@ function updatePenExplodePartGrab(pen) {
     return;
   }
 
-  const stylusLocal = getStylusPositionInObjectParent(penGrabbedExplodePart.object);
-  if (!stylusLocal) {
+  const stylusPose = getStylusPoseInObjectParent(penGrabbedExplodePart.object);
+  if (!stylusPose) {
     return;
   }
 
-  const localDelta = stylusLocal.sub(penExplodePartGrabStartStylusLocal);
-  const pullDelta = Math.max(0, penExplodePartGrabStartPose.z - pen.pos.z) * Math.max(penGrabbedExplodePart.distance * 1.2, 0.045);
-
-  penGrabbedExplodePart.dragOffset.copy(penExplodePartGrabStartDragOffset)
-    .add(new THREE.Vector3(
-      localDelta.x * STEREO_CONFIG.penMoveScaleX,
-      localDelta.y * STEREO_CONFIG.penMoveScaleY,
-      localDelta.z * 1.15
-    ))
-    .addScaledVector(penGrabbedExplodePart.direction, pullDelta);
-
-  applyExplodedLayout();
+  if (penInteractionMode === "transform" && penDragStartStylusPose?.position) {
+    const localDelta = stylusPose.position.clone().sub(penDragStartStylusPose.position);
+    penGrabbedExplodePart.dragOffset.copy(penExplodePartGrabStartDragOffset)
+      .add(new THREE.Vector3(
+        localDelta.x * STEREO_CONFIG.penMoveScaleX,
+        localDelta.y * STEREO_CONFIG.penMoveScaleY,
+        localDelta.z * 1.15
+      ));
+    if (penDragStartStylusPose.quaternion) {
+      const deltaRotation = stylusPose.quaternion.clone().multiply(penDragStartStylusPose.quaternion.clone().invert());
+      penGrabbedExplodePart.object.quaternion.copy(deltaRotation.multiply(penGrabStartQuaternion.clone()));
+    }
+    applyExplodedLayout();
+  }
 }
 
-function beginPenGrab(pen) {
+function beginPenGrab(pen, mode) {
   if (!currentObject || !lastStylusIntersections.length) {
     return false;
   }
@@ -3857,22 +4028,23 @@ function beginPenGrab(pen) {
     y: pen.pos.y,
     z: pen.pos.z
   };
+  penInteractionMode = mode;
+  penDragStartStylusPose = {
+    position: stylusPose.position.clone(),
+    quaternion: stylusPose.quaternion.clone()
+  };
   penGrabHitPointLocal = currentObject.worldToLocal(lastStylusIntersections[0].point.clone());
   penGrabStartPosition.copy(currentObject.position);
   penGrabStartQuaternion.copy(currentObject.quaternion);
   penGrabStartScale.copy(currentObject.scale);
-  penGrabStartRotation = {
-    stylusQuaternion: stylusPose.quaternion.clone(),
-    offset: currentObject.position.clone().sub(stylusPose.position).applyQuaternion(currentObject.quaternion.clone().invert()),
-    rotationOffset: stylusPose.quaternion.clone().invert().multiply(currentObject.quaternion.clone())
-  };
+  penGrabStartRotation = null;
   isPenGrabbingModel = true;
-  setStatus("笔已抓住模型：移动、旋转、前后推进都可控制模型");
+  setStatus("笔已抓住模型：主键或左键空间拖拽可同时旋转和平移，缩放可用鼠标滚轮");
   return true;
 }
 
 function updatePenGrab(pen) {
-  if (!isPenGrabbingModel || !currentObject || !penGrabStartPose || !penGrabStartRotation) {
+  if (!isPenGrabbingModel || !currentObject || !penGrabStartPose) {
     return;
   }
 
@@ -3881,15 +4053,18 @@ function updatePenGrab(pen) {
     return;
   }
 
-  const nextQuaternion = stylusPose.quaternion.clone().multiply(penGrabStartRotation.rotationOffset);
-  currentObject.quaternion.copy(nextQuaternion);
-
-  const nextPosition = penGrabStartRotation.offset.clone().applyQuaternion(nextQuaternion).add(stylusPose.position);
-  currentObject.position.copy(nextPosition);
-
-  const depthDelta = penGrabStartPose.z - pen.pos.z;
-  const scaleFactor = THREE.MathUtils.clamp(1 + depthDelta * STEREO_CONFIG.penScaleSpeed, 0.35, 3.5);
-  currentObject.scale.copy(penGrabStartScale).multiplyScalar(scaleFactor);
+  if (penInteractionMode === "transform" && penDragStartStylusPose?.position) {
+    const localDelta = stylusPose.position.clone().sub(penDragStartStylusPose.position);
+    currentObject.position.copy(penGrabStartPosition).add(new THREE.Vector3(
+      localDelta.x * STEREO_CONFIG.penMoveScaleX,
+      localDelta.y * STEREO_CONFIG.penMoveScaleY,
+      localDelta.z * 1.15
+    ));
+    if (penDragStartStylusPose.quaternion) {
+      const deltaRotation = stylusPose.quaternion.clone().multiply(penDragStartStylusPose.quaternion.clone().invert());
+      currentObject.quaternion.copy(deltaRotation.multiply(penGrabStartQuaternion.clone()));
+    }
+  }
 }
 
 function applyPenManipulation() {
@@ -3898,8 +4073,15 @@ function applyPenManipulation() {
     return;
   }
 
+  if (activePointerManipulation) {
+    resetPenInteractionState();
+    return;
+  }
+
   const pen = stereoTrackingData?.pen;
-  const penPressed = Number(stereoTrackingData?.penKey || 0) > 0;
+  const penKey = Number(stereoTrackingData?.penKey || 0);
+  const penPressed = penKey > 0;
+  const nextPenInteractionMode = getPenInteractionMode(penKey);
 
   if (!pen || !pen.pos) {
     resetPenInteractionState();
@@ -3921,12 +4103,22 @@ function applyPenManipulation() {
       y: pen.pos.y,
       z: pen.pos.z
     };
-    const hitPart = getExplodePartFromStylusIntersections();
-    if (hitPart && activateSingleExplodePart(hitPart, "笔已命中子结构，正在切换到单独展开")) {
-      if (!beginPenExplodePartGrab(pen, hitPart)) {
-        setStatus("笔已命中子结构，但暂时无法抓取，请稍微移动后重试");
+    if (interactionMode === "part") {
+      if (!hasMultipleExplodableParts()) {
+        setStatus("当前模型没有可独立交互的子结构，可切回模型整体交互");
+        resetPenInteractionState();
+        return;
       }
-    } else if (!beginPenGrab(pen)) {
+
+      const hitPart = getExplodePartFromStylusIntersections();
+      if (hitPart && activateSingleExplodePart(hitPart, "笔已命中子结构，正在切换到单独展开")) {
+        if (!beginPenExplodePartGrab(pen, hitPart, nextPenInteractionMode || "rotate")) {
+          setStatus("笔已命中子结构，但暂时无法抓取，请稍微移动后重试");
+        }
+      } else {
+        setStatus("笔已按下：请先用射线命中某个子结构");
+      }
+    } else if (!beginPenGrab(pen, nextPenInteractionMode || "rotate")) {
       setStatus("笔已按下：请用射线命中模型后再抓取");
     }
   }
