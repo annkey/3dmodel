@@ -155,7 +155,7 @@ let animationMixer = null;
 let dragDepth = 0;
 let isWireframe = false;
 let isGridVisible = true;
-let isStereoEnabled = false;
+let isStereoEnabled = true;
 let isStereoDisplayActive = false;
 let stereoEffect = null;
 let stereoTracker = null;
@@ -211,6 +211,7 @@ let explodeMode = "none";
 let explodeIntensity = 0.65;
 let selectedExplodePart = null;
 let selectedExplodeSourceMaterials = null;
+let selectedExplodeSourceScale = null;
 const pointerSelectionRaycaster = new THREE.Raycaster();
 const pointerSelectionCoords = new THREE.Vector2();
 let pointerDownScreen = null;
@@ -259,7 +260,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.target.set(0, 1, 0);
 controls.autoRotate = false;
-controls.autoRotateSpeed = 2;
+controls.autoRotateSpeed = 1;
 
 const hemiLight = new THREE.HemisphereLight(0xfff4dd, 0xc98f66, 1.45);
 scene.add(hemiLight);
@@ -2708,8 +2709,13 @@ function clearSelectedExplodePart() {
     selectedExplodePart.object.material = selectedExplodeSourceMaterials;
   }
 
+  if (selectedExplodeSourceScale) {
+    selectedExplodePart.object.scale.copy(selectedExplodeSourceScale);
+  }
+
   selectedExplodePart = null;
   selectedExplodeSourceMaterials = null;
+  selectedExplodeSourceScale = null;
   applyExplodedLayout();
 }
 
@@ -2721,23 +2727,30 @@ function highlightExplodePart(part) {
   clearSelectedExplodePart();
   selectedExplodePart = part;
   selectedExplodeSourceMaterials = part.object.material;
+  selectedExplodeSourceScale = part.object.scale.clone();
 
   const sourceMaterials = Array.isArray(part.object.material) ? part.object.material : [part.object.material];
   const highlightedMaterials = sourceMaterials.map((material) => {
     const clone = material?.clone?.() || material;
 
     if ("emissive" in clone && clone.emissive?.setHex) {
-      clone.emissive.setHex(0x7fb0ff);
-      clone.emissiveIntensity = Math.max(0.12, Number(clone.emissiveIntensity) || 0.12);
+      clone.emissive = clone.emissive.clone();
+      clone.emissive.offsetHSL(0.01, -0.01, 0.015);
+      clone.emissiveIntensity = Math.max(0.03, Number(clone.emissiveIntensity) || 0.03);
     } else if ("color" in clone && clone.color?.offsetHSL) {
       clone.color = clone.color.clone();
-      clone.color.offsetHSL(0.005, 0.06, 0.03);
+      clone.color.offsetHSL(0.004, 0.015, 0.03);
+    }
+
+    if ("opacity" in clone && clone.transparent !== true) {
+      clone.transparent = true;
     }
 
     return clone;
   });
 
   part.object.material = Array.isArray(part.object.material) ? highlightedMaterials : highlightedMaterials[0];
+  part.object.scale.copy(selectedExplodeSourceScale).multiplyScalar(1.015);
 }
 
 function activateSingleExplodePart(part, statusMessage) {
@@ -3116,7 +3129,7 @@ function updatePanoramaControls() {
 function syncPanoramaPresentation() {
   const isPanoramaTheme = activeThemeKey === "panorama";
 
-  ground.visible = !isPanoramaTheme;
+  ground.visible = !isPanoramaTheme && isGridVisible;
   grid.visible = !isPanoramaTheme && isGridVisible;
 
   if (!currentObject) {
