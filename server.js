@@ -366,6 +366,31 @@ async function handleApi(req, res, requestUrl) {
     return;
   }
 
+  if (req.method === "GET" && requestUrl.pathname === "/api/shared/models") {
+    try {
+      sendJson(res, 200, buildSharedModelResponse());
+    } catch (error) {
+      sendJson(res, error.status || 500, {
+        error: "SharedModelListFailed",
+        message: error.message || "Failed to read shared models."
+      });
+    }
+    return;
+  }
+
+  const sharedModelFileMatch = requestUrl.pathname.match(/^\/api\/shared\/models\/([^/]+)\/files\/(.+)$/);
+  if (sharedModelFileMatch && (req.method === "GET" || req.method === "HEAD")) {
+    try {
+      await serveSharedModelFile(req, res, sharedModelFileMatch[1], sharedModelFileMatch[2]);
+    } catch (error) {
+      sendJson(res, error.status || 404, {
+        error: "SharedModelFileReadFailed",
+        message: error.message || "Shared model file does not exist."
+      });
+    }
+    return;
+  }
+
   if (req.method === "GET" && requestUrl.pathname === "/api/admin/assets") {
     try {
       assertAdmin(req);
@@ -1732,6 +1757,24 @@ function buildUserModelResponse(userId) {
   };
 }
 
+function buildSharedModelResponse() {
+  const store = readUserModelIndexFile();
+  const models = store.models
+    .filter((model) => normalizeShareVisibility(model.visibility || (model.isPublic ? "public" : "private")) === "public")
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.sharedAt || left.updatedAt || left.createdAt || 0) || 0;
+      const rightTime = Date.parse(right.sharedAt || right.updatedAt || right.createdAt || 0) || 0;
+      return rightTime - leftTime;
+    })
+    .map(toPublicSharedModel);
+  return {
+    ok: true,
+    updatedAt: new Date().toISOString(),
+    total: models.length,
+    models
+  };
+}
+
 async function handleUserModelUpload(req, userId) {
   const user = getPublicUserById(userId);
   if (!user) {
@@ -1847,6 +1890,46 @@ async function serveUserModelFile(req, res, userId, modelId, encodedFileName) {
     "Content-Type": inferAssetContentType(path.extname(file.storedName).toLowerCase()),
     "Content-Length": stat.size,
     "Cache-Control": "private, max-age=3600",
+    "Content-Disposition": `inline; filename="${encodeURIComponent(file.originalName)}"`
+  });
+
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
+
+  fs.createReadStream(normalizedFilePath).pipe(res);
+}
+
+async function serveSharedModelFile(req, res, modelId, encodedFileName) {
+  const model = getSharedModelRecord(modelId);
+  if (!model) {
+    throwHttpError(404, "Shared model does not exist.");
+  }
+
+  const fileName = decodeURIComponent(encodedFileName);
+  const file = model.files.find((item) => item.storedName === fileName || item.originalName === fileName);
+  if (!file) {
+    throwHttpError(404, "Shared model file does not exist.");
+  }
+
+  if (file.storageDriver === "oss" && file.objectKey) {
+    await proxyOssObject(req, res, file.objectKey, file);
+    return;
+  }
+
+  const filePath = path.join(getUserModelUploadDir(model.userId, model.id), file.storedName);
+  const normalizedFilePath = path.normalize(filePath);
+  const uploadDir = getUserModelUploadDir(model.userId, model.id);
+  if (!normalizedFilePath.startsWith(uploadDir)) {
+    throwHttpError(403, "Invalid shared model file path.");
+  }
+
+  const stat = await fsp.stat(normalizedFilePath);
+  res.writeHead(200, {
+    "Content-Type": inferAssetContentType(path.extname(file.storedName).toLowerCase()),
+    "Content-Length": stat.size,
+    "Cache-Control": "public, max-age=3600",
     "Content-Disposition": `inline; filename="${encodeURIComponent(file.originalName)}"`
   });
 
@@ -2029,10 +2112,14 @@ async function updateUserModelFromRequest(req, requestUrl, userId, modelId) {
   if (contentType.toLowerCase().includes("multipart/form-data")) {
     const request = toWebRequest(req, requestUrl);
     const form = await request.formData();
-    return updateUserModel(userId, modelId, {
+    const payload = {
       name: form.get("name"),
       cover: form.get("cover")
-    });
+    };
+    if (form.has("visibility")) payload.visibility = form.get("visibility");
+    if (form.has("shareVisibility")) payload.shareVisibility = form.get("shareVisibility");
+    if (form.has("isPublic")) payload.isPublic = form.get("isPublic");
+    return updateUserModel(userId, modelId, payload);
   }
 
   const request = toWebRequest(req, requestUrl);
@@ -2046,6 +2133,28 @@ async function updateUserModel(userId, modelId, payload) {
   const model = store.models.find((item) => item.userId === userId && item.id === decodedId);
   if (!model) {
     throwHttpError(404, "模型记录不存在。");
+  }
+
+  const hasVisibilityUpdate = Object.prototype.hasOwnProperty.call(payload || {}, "visibility")
+    || Object.prototype.hasOwnProperty.call(payload || {}, "shareVisibility")
+    || Object.prototype.hasOwnProperty.call(payload || {}, "isPublic");
+  if (hasVisibilityUpdate) {
+    const name = normalizeText(payload?.name);
+    if (name) {
+      if (name.length > 80) {
+        throwHttpError(400, "Model name cannot exceed 80 characters.");
+      }
+      model.name = name;
+    }
+    const visibility = normalizeShareVisibility(payload?.visibility ?? payload?.shareVisibility ?? (payload?.isPublic ? "public" : "private"));
+    applyUserModelShareVisibility(model, visibility);
+    model.updatedAt = new Date().toISOString();
+    writeUserModelIndexFile(store);
+    return {
+      ok: true,
+      model: toPublicUserModel(model),
+      ...buildUserModelResponse(userId)
+    };
   }
 
   const name = normalizeText(payload?.name);
@@ -2812,6 +2921,78 @@ function getCreditAdjustTitle(type) {
   return type === "manual_deduct" ? "人工扣除" : "营销赠送";
 }
 
+function normalizeShareVisibility(value) {
+  return normalizeText(value) === "public" ? "public" : "private";
+}
+
+function applyUserModelShareVisibility(model, visibility) {
+  const previous = normalizeShareVisibility(model.visibility || model.shareVisibility || (model.isPublic ? "public" : "private"));
+  const next = normalizeShareVisibility(visibility);
+  const now = new Date().toISOString();
+  if (previous === next) {
+    model.visibility = next;
+    model.isPublic = next === "public";
+    return;
+  }
+
+  model.visibility = next;
+  model.isPublic = next === "public";
+  if (next === "public") {
+    model.sharedAt = model.sharedAt || now;
+    model.unsharedAt = "";
+    grantModelShareCredits(model.userId, model.id);
+    return;
+  }
+
+  model.unsharedAt = now;
+  revokeRecentModelShareCredits(model.userId, model.id);
+}
+
+function grantModelShareCredits(userId, modelId) {
+  const store = readUserCreditsFile();
+  appendCreditRecord(store, {
+    userId,
+    amount: 2,
+    type: "share_gift",
+    title: "分享赠送",
+    note: "分享模型公开可见赠送 2 积分",
+    meta: {
+      source: "model-share",
+      modelId
+    }
+  });
+  writeUserCreditsFile(store);
+}
+
+function revokeRecentModelShareCredits(userId, modelId) {
+  const store = readUserCreditsFile();
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const grant = store.records.find((record) => (
+    record.userId === userId
+    && record.type === "share_gift"
+    && Number(record.amount || 0) === 2
+    && record.meta?.modelId === modelId
+    && (Date.parse(record.createdAt || 0) || 0) >= cutoff
+    && !store.records.some((item) => item.type === "share_cancel_deduct" && item.meta?.relatedRecordId === record.id)
+  ));
+  if (!grant) return null;
+
+  const record = appendCreditRecord(store, {
+    userId,
+    amount: -2,
+    type: "share_cancel_deduct",
+    title: "取消分享扣分",
+    note: "30 天内取消公开分享，扣回分享赠送 2 积分",
+    meta: {
+      source: "model-share",
+      modelId,
+      relatedRecordId: grant.id
+    }
+  });
+  writeUserCreditsFile(store);
+  return record;
+}
+
 function readUserModelIndexFile() {
   if (!fs.existsSync(userModelIndexPath)) {
     return { models: [] };
@@ -2870,6 +3051,10 @@ function normalizeUserModelRecord(record) {
     downloadStrategy: record?.downloadStrategy
       ? normalizeDownloadStrategy(record.downloadStrategy)
       : source === "ai" && generatedTaskId && provider ? "remote-first" : "local-first",
+    visibility: normalizeShareVisibility(record?.visibility || record?.shareVisibility || (record?.isPublic ? "public" : "private")),
+    isPublic: normalizeShareVisibility(record?.visibility || record?.shareVisibility || (record?.isPublic ? "public" : "private")) === "public",
+    sharedAt: normalizeText(record?.sharedAt),
+    unsharedAt: normalizeText(record?.unsharedAt),
     createdAt: normalizeText(record?.createdAt) || new Date().toISOString(),
     updatedAt: normalizeText(record?.updatedAt) || normalizeText(record?.createdAt) || new Date().toISOString()
   };
@@ -2947,6 +3132,14 @@ function getUserModelRecord(userId, modelId, store = readUserModelIndexFile()) {
   return store.models.find((model) => model.userId === userId && model.id === decodedId) || null;
 }
 
+function getSharedModelRecord(modelId, store = readUserModelIndexFile()) {
+  const decodedId = decodeURIComponent(modelId);
+  return store.models.find((model) => (
+    model.id === decodedId
+    && normalizeShareVisibility(model.visibility || (model.isPublic ? "public" : "private")) === "public"
+  )) || null;
+}
+
 function getUserModelStorageSummary(userId, quotaBytes, store = readUserModelIndexFile()) {
   const usedBytes = store.models
     .filter((model) => model.userId === userId)
@@ -2980,6 +3173,10 @@ function toPublicUserModel(model) {
     remoteDownloadItems: model.remoteDownloadItems || [],
     remoteUrlExpiresAt: model.remoteUrlExpiresAt || "",
     downloadStrategy: model.downloadStrategy || "local-first",
+    visibility: normalizeShareVisibility(model.visibility || (model.isPublic ? "public" : "private")),
+    isPublic: normalizeShareVisibility(model.visibility || (model.isPublic ? "public" : "private")) === "public",
+    sharedAt: model.sharedAt || "",
+    unsharedAt: model.unsharedAt || "",
     entryFile: model.entryFile,
     coverFile: cover?.storedName || "",
     coverUrl: cover ? `/api/work/models/${encodeURIComponent(model.id)}/files/${encodeURIComponent(cover.storedName)}` : "",
@@ -2995,6 +3192,39 @@ function toPublicUserModel(model) {
       url: `/api/work/models/${encodeURIComponent(model.id)}/files/${encodeURIComponent(file.storedName)}`
     })),
     contentType: entry?.contentType || "",
+    createdAt: model.createdAt,
+    updatedAt: model.updatedAt
+  };
+}
+
+function toPublicSharedModel(model) {
+  const owner = getPublicUserById(model.userId);
+  const entry = model.files.find((file) => file.storedName === model.entryFile) || model.files[0];
+  const cover = model.coverFile
+    ? model.files.find((file) => file.storedName === model.coverFile)
+    : model.files.find((file) => file.fieldName === "cover" && isImageUploadFile(file));
+  const buildSharedFileUrl = (file) => `/api/shared/models/${encodeURIComponent(model.id)}/files/${encodeURIComponent(file.storedName)}`;
+  return {
+    id: model.id,
+    name: model.name,
+    ownerName: owner?.displayName || owner?.username || "",
+    source: model.source || "upload",
+    sourceText: model.source === "ai" ? "AI生成" : "我的模型",
+    generatedTaskId: model.generatedTaskId || "",
+    provider: model.provider || "",
+    providerName: model.providerName || "",
+    mode: model.mode || "",
+    displayModelVersion: model.displayModelVersion || "",
+    entryFile: model.entryFile,
+    coverFile: cover?.storedName || "",
+    coverUrl: cover ? buildSharedFileUrl(cover) : "",
+    format: model.format,
+    fileSizeBytes: model.fileSizeBytes,
+    modelUrl: entry ? buildSharedFileUrl(entry) : "",
+    contentType: entry?.contentType || "",
+    visibility: "public",
+    isPublic: true,
+    sharedAt: model.sharedAt || "",
     createdAt: model.createdAt,
     updatedAt: model.updatedAt
   };

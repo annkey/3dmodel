@@ -341,6 +341,14 @@ body {
   padding: 6px;
 }
 
+.action-menu-toolbar {
+  align-items: flex-start;
+}
+
+.action-menu {
+  position: relative;
+}
+
 .action-btn {
   display: inline-flex;
   align-items: center;
@@ -380,6 +388,47 @@ body {
 
 .action-btn-secondary:hover {
   background: rgba(239, 246, 255, 0.98);
+}
+
+.action-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 8;
+  display: grid;
+  gap: 4px;
+  width: 148px;
+  padding: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
+}
+
+.action-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.action-menu-item:hover {
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--accent-dark);
+}
+
+.action-menu-file {
+  cursor: pointer;
 }
 
 .tool-btn {
@@ -870,6 +919,13 @@ body {
 
 #model-list-modal .modal-card {
   padding: 16px;
+  border-radius: 14px;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.14);
+}
+
+#online-model-modal .shared-model-modal-card {
+  width: min(980px, calc(100vw - 32px));
+  padding: 18px;
   border-radius: 14px;
   box-shadow: 0 18px 42px rgba(15, 23, 42, 0.14);
 }
@@ -1480,6 +1536,125 @@ body {
   font-size: 11px;
 }
 
+.shared-model-library {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 240px));
+  gap: 16px;
+  align-items: start;
+}
+
+.shared-model-card {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(94px, auto);
+  min-width: 0;
+  width: 100%;
+  max-width: 240px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 45px rgba(18, 32, 56, 0.08);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.shared-model-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 48px rgba(18, 32, 56, 0.12);
+}
+
+.shared-model-card:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.28);
+  outline-offset: 3px;
+}
+
+.shared-model-cover {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: 8px 8px 0 0;
+  background:
+    radial-gradient(circle at 60% 38%, rgba(103, 232, 249, 0.54), transparent 34%),
+    linear-gradient(145deg, #132146, #2261ad);
+}
+
+.shared-model-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.shared-model-cube {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #f8fcff, #50d5ff 52%, #0e6ccf);
+  box-shadow: 0 16px 28px rgba(8, 18, 45, 0.34);
+  transform: rotateX(58deg) rotateZ(42deg);
+}
+
+.shared-model-info {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 13px 14px;
+}
+
+.shared-model-info h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shared-model-info p,
+.shared-model-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.shared-model-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.shared-model-meta span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shared-model-info p {
+  display: -webkit-box;
+  min-height: 34px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.shared-model-public {
+  flex: 0 0 auto;
+  min-height: 20px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(22, 155, 98, 0.1);
+  color: #169b62;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 @media (max-width: 960px) {
   .viewer-shell {
     height: 100vh;
@@ -1497,6 +1672,14 @@ body {
 
   .model-list {
     grid-template-columns: 1fr;
+  }
+
+  .shared-model-library {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shared-model-card {
+    max-width: none;
   }
 
   .model-list-item {
@@ -1542,6 +1725,12 @@ body {
     flex: 1 1 auto;
   }
 
+  .action-menu-panel {
+    left: 0;
+    right: auto;
+    width: min(176px, calc(100vw - 32px));
+  }
+
   .modal-shell {
     padding: 16px;
   }
@@ -1574,5 +1763,15 @@ body {
 
   .login-head h2 {
     font-size: 28px;
+  }
+}
+
+@media (max-width: 640px) {
+  .shared-model-library {
+    grid-template-columns: 1fr;
+  }
+
+  .shared-model-card {
+    max-width: none;
   }
 }

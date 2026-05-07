@@ -591,13 +591,20 @@ function renderCreditRow(record) {
       <td>${escapeHtml(record.balance)}</td>
       <td>
         <div class="cell-main">
-          <strong>${escapeHtml(record.title || "积分记录")}</strong>
+          <strong>${escapeHtml(formatCreditRecordTitle(record))}</strong>
           <small>${escapeHtml(record.note || "-")}</small>
         </div>
       </td>
       <td>${escapeHtml(formatTime(record.createdAt))}</td>
     </tr>
   `;
+}
+
+function formatCreditRecordTitle(record) {
+  if (record?.title) return record.title;
+  if (record?.type === "share_gift") return "分享赠送";
+  if (record?.type === "share_cancel_deduct") return "取消分享扣分";
+  return "积分记录";
 }
 
 function renderUserRow(user) {

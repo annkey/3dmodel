@@ -74,6 +74,13 @@ const interactionModeButton = document.createElement("button");
 const fullscreenButton = document.getElementById("toggle-fullscreen");
 const exportButton = document.getElementById("export-image");
 const submodelSelect = document.getElementById("submodel-select");
+const playbackActionMenu = document.getElementById("playback-action-menu");
+const playbackActionTrigger = document.getElementById("playback-action-trigger");
+const playbackActionPanel = document.getElementById("playback-action-panel");
+const aiActionMenu = document.getElementById("ai-action-menu");
+const aiActionTrigger = document.getElementById("ai-action-trigger");
+const aiActionPanel = document.getElementById("ai-action-panel");
+const openOnlineModelModalButton = document.getElementById("open-online-model-modal");
 const openGeneratorModalButton = document.getElementById("open-generator-modal");
 const openOptimizerModalButton = document.getElementById("open-optimizer-modal");
 const openModelListModalButton = document.getElementById("open-model-list-modal");
@@ -100,7 +107,9 @@ const meshMetric = document.getElementById("mesh-metric");
 const generatorModal = document.getElementById("generator-modal");
 const optimizerModal = document.getElementById("optimizer-modal");
 const modelListModal = document.getElementById("model-list-modal");
+const onlineModelModal = document.getElementById("online-model-modal");
 const modelListModalTitle = document.getElementById("model-list-modal-title");
+const sharedModelLibraryTemplate = document.getElementById("shared-model-library-template");
 const loginModal = document.getElementById("login-modal");
 const loginForm = document.getElementById("login-form");
 const loginUsernameInput = document.getElementById("login-username");
@@ -229,6 +238,8 @@ let playbackLoadTimeoutId = null;
 let playbackLoadProgressPercent = 0;
 let playbackLoadKnownTotalBytes = 0;
 let currentModelFileSizeBytes = 0;
+let sharedModelsCache = null;
+let sharedModelsLoadedAt = 0;
 let authSession = null;
 let pendingAuthAction = null;
 let explodeParts = [];
@@ -495,6 +506,7 @@ async function bootstrap() {
   if (modelListModalTitle) {
     modelListModalTitle.textContent = "AI生模列表";
   }
+  setupSharedModelLibrary();
   stereoEffect = new KStereoEffect(renderer);
   stereoEffect.setSize(window.innerWidth, window.innerHeight);
   stereoEffect.setViewScale(1);
@@ -550,16 +562,26 @@ async function bootstrap() {
     highlightSelectedEntry();
     void handleLoadModel();
   });
-  openGeneratorModalButton.addEventListener("click", () => {
+  playbackActionTrigger?.addEventListener("click", () => toggleActionMenu("playback"));
+  aiActionTrigger?.addEventListener("click", () => toggleActionMenu("ai"));
+  openOnlineModelModalButton?.addEventListener("click", () => {
+    closeActionMenus();
+    openModal(onlineModelModal);
+    void loadSharedModelLibrary();
+  });
+  openGeneratorModalButton?.addEventListener("click", () => {
+    closeActionMenus();
     requireLogin(() => openModal(generatorModal), "请先登录后再使用 AI 生成模型。");
   });
   openOptimizerModalButton?.addEventListener("click", () => {
+    closeActionMenus();
     requireLogin(() => {
       syncOptimizerFormState();
       openModal(optimizerModal);
     }, "请先登录后再使用 AI 模型优化。");
   });
-  openModelListModalButton.addEventListener("click", () => {
+  openModelListModalButton?.addEventListener("click", () => {
+    closeActionMenus();
     requireLogin(() => {
       renderGeneratedTaskList();
       void syncGeneratedTasksFromServer();
@@ -591,6 +613,7 @@ async function bootstrap() {
     void handleLoginSubmit();
   });
   userMenuTrigger?.addEventListener("click", () => {
+    closeActionMenus();
     userMenuPanel?.classList.toggle("hidden");
   });
   logoutButton?.addEventListener("click", () => {
@@ -609,6 +632,9 @@ async function bootstrap() {
   document.addEventListener("click", (event) => {
     if (!userMenu?.contains(event.target)) {
       userMenuPanel?.classList.add("hidden");
+    }
+    if (!playbackActionMenu?.contains(event.target) && !aiActionMenu?.contains(event.target)) {
+      closeActionMenus();
     }
   });
   window.addEventListener("resize", handleResize);
@@ -765,6 +791,7 @@ function handleGlobalKeydown(event) {
   closeModal(generatorModal);
   closeModal(optimizerModal);
   closeModal(modelListModal);
+  closeModal(onlineModelModal);
   closeModal(loginModal);
 }
 
@@ -782,6 +809,112 @@ function closeModal(modal) {
   }
 
   modal.classList.add("hidden");
+}
+
+function setupSharedModelLibrary() {
+  if (!onlineModelModal) return;
+  const card = onlineModelModal.querySelector(".shared-model-modal-card") || onlineModelModal.querySelector(".modal-card");
+  if (!card) return;
+  const title = onlineModelModal.querySelector("#online-model-modal-title");
+  if (title) title.textContent = "模型分享库";
+  const description = title?.parentElement?.querySelector("p");
+  if (description) {
+    description.textContent = "选择公开分享的模型，点击卡片直接载入播放器。";
+  }
+  card.querySelector(":scope > .empty-state:not(#shared-model-feedback)")?.classList.add("hidden");
+  if (!document.getElementById("shared-model-library") && sharedModelLibraryTemplate?.content) {
+    card.appendChild(sharedModelLibraryTemplate.content.cloneNode(true));
+  }
+  document.getElementById("shared-model-library")?.addEventListener("click", (event) => {
+    const cardButton = event.target.closest("[data-shared-model-id]");
+    if (!cardButton) return;
+    void playSharedModel(cardButton.dataset.sharedModelId || "");
+  });
+}
+
+async function loadSharedModelLibrary({ force = false } = {}) {
+  const list = document.getElementById("shared-model-library");
+  const feedback = document.getElementById("shared-model-feedback");
+  if (!list || !feedback) return;
+
+  const isFresh = sharedModelsCache && Date.now() - sharedModelsLoadedAt < 60 * 1000;
+  if (isFresh && !force) {
+    renderSharedModelLibrary(sharedModelsCache);
+    return;
+  }
+
+  feedback.textContent = "正在读取模型分享库...";
+  feedback.classList.remove("hidden");
+  list.innerHTML = "";
+  try {
+    const data = await fetchJson("/api/shared/models");
+    sharedModelsCache = Array.isArray(data.models) ? data.models : [];
+    sharedModelsLoadedAt = Date.now();
+    renderSharedModelLibrary(sharedModelsCache);
+  } catch (error) {
+    sharedModelsCache = [];
+    feedback.textContent = error.message || "模型分享库读取失败，请稍后重试。";
+    feedback.classList.remove("hidden");
+  }
+}
+
+function renderSharedModelLibrary(models) {
+  const list = document.getElementById("shared-model-library");
+  const feedback = document.getElementById("shared-model-feedback");
+  if (!list || !feedback) return;
+
+  if (!models.length) {
+    list.innerHTML = "";
+    feedback.textContent = "暂无公开分享的模型。";
+    feedback.classList.remove("hidden");
+    return;
+  }
+
+  feedback.classList.add("hidden");
+  feedback.textContent = "";
+  list.innerHTML = models.map(renderSharedModelCard).join("");
+}
+
+function renderSharedModelCard(model) {
+  const title = model.name || model.entryFile || "公开模型";
+  const coverHtml = model.coverUrl
+    ? `<img src="${escapeHtml(model.coverUrl)}" alt="${escapeHtml(title)} 封面" loading="lazy" />`
+    : `<span class="shared-model-cube"></span>`;
+  const meta = [
+    model.ownerName ? `分享者 ${model.ownerName}` : "",
+    model.source === "ai" ? "AI生成" : "本地上传",
+    model.format ? String(model.format).toUpperCase() : "",
+    formatBytes(model.fileSizeBytes || 0)
+  ].filter(Boolean).join(" · ");
+  const time = formatTimeLabel(model.sharedAt || model.updatedAt || model.createdAt);
+  return `
+    <button class="shared-model-card" type="button" data-shared-model-id="${escapeHtml(model.id)}">
+      <div class="shared-model-cover">${coverHtml}</div>
+      <div class="shared-model-info">
+        <h3>${escapeHtml(title)}</h3>
+        <div class="shared-model-meta">
+          <span>${escapeHtml(time)}</span>
+          <span class="shared-model-public">公开</span>
+        </div>
+        ${meta ? `<p>${escapeHtml(meta)}</p>` : ""}
+      </div>
+    </button>
+  `;
+}
+
+async function playSharedModel(modelId) {
+  const model = (sharedModelsCache || []).find((item) => item.id === modelId);
+  if (!model?.modelUrl) {
+    setStatus("当前公开模型暂无可播放文件");
+    return;
+  }
+  closeModal(onlineModelModal);
+  setStatus("正在加载公开分享模型...");
+  await loadRemoteModel(model.modelUrl, {
+    taskId: model.id,
+    name: model.name || "公开模型",
+    formatHint: model.format || inferFormatFromUrl(model.modelUrl)
+  });
 }
 
 function restoreAuthSession() {
@@ -972,10 +1105,34 @@ function fillSelectOptions(select, options, selectedValue) {
   }
 }
 
+function toggleActionMenu(menuName) {
+  const targetPanel = menuName === "playback" ? playbackActionPanel : aiActionPanel;
+  const targetTrigger = menuName === "playback" ? playbackActionTrigger : aiActionTrigger;
+  const shouldOpen = targetPanel?.classList.contains("hidden");
+
+  closeActionMenus();
+  userMenuPanel?.classList.add("hidden");
+
+  if (!targetPanel || !targetTrigger || !shouldOpen) {
+    return;
+  }
+
+  targetPanel.classList.remove("hidden");
+  targetTrigger.setAttribute("aria-expanded", "true");
+}
+
+function closeActionMenus() {
+  playbackActionPanel?.classList.add("hidden");
+  aiActionPanel?.classList.add("hidden");
+  playbackActionTrigger?.setAttribute("aria-expanded", "false");
+  aiActionTrigger?.setAttribute("aria-expanded", "false");
+}
+
 function bindLocalModelPickerTriggers() {
   for (const trigger of localModelPickerTriggers) {
     trigger.addEventListener("click", (event) => {
       event.preventDefault();
+      closeActionMenus();
       openLocalModelPicker();
     });
   }

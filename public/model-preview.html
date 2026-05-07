@@ -55,11 +55,22 @@
         </div>
 
         <div class="hud top-right">
-          <div class="toolbar toolbar-ghost" aria-label="模型生成与列表">
-            <label class="action-btn action-btn-secondary action-btn-file" for="model-files">本地模型播放</label>
-            <button id="open-generator-modal" class="action-btn" type="button">AI生成模型</button>
-            <button id="open-optimizer-modal" class="action-btn action-btn-secondary" type="button">AI模型优化</button>
-            <button id="open-model-list-modal" class="action-btn action-btn-secondary" type="button">3D模型列表</button>
+          <div class="toolbar toolbar-ghost action-menu-toolbar" aria-label="模型预览操作">
+            <div class="action-menu" id="playback-action-menu">
+              <button id="playback-action-trigger" class="action-btn action-btn-secondary" type="button" aria-haspopup="true" aria-expanded="false">3D模型播放</button>
+              <div id="playback-action-panel" class="action-menu-panel hidden">
+                <label class="action-menu-item action-menu-file" for="model-files">本地模型播放</label>
+                <button id="open-online-model-modal" class="action-menu-item" type="button">线上模型播放</button>
+              </div>
+            </div>
+            <div class="action-menu" id="ai-action-menu">
+              <button id="ai-action-trigger" class="action-btn action-btn-secondary" type="button" aria-haspopup="true" aria-expanded="false">AI生成模型</button>
+              <div id="ai-action-panel" class="action-menu-panel hidden">
+                <button id="open-generator-modal" class="action-menu-item" type="button">AI生成模型</button>
+                <button id="open-optimizer-modal" class="action-menu-item" type="button">AI模型优化</button>
+                <button id="open-model-list-modal" class="action-menu-item" type="button">AI生模列表</button>
+              </div>
+            </div>
             <div id="user-menu" class="user-menu hidden">
               <button id="user-menu-trigger" class="user-menu-trigger" type="button" aria-label="用户信息">
                 <span id="user-avatar" class="user-avatar">U</span>
@@ -159,7 +170,7 @@
 
         <div id="generator-modal" class="modal-shell hidden" role="dialog" aria-modal="true" aria-labelledby="generator-modal-title">
           <div class="modal-backdrop" data-close-modal="generator-modal"></div>
-          <section class="modal-card">
+          <section class="modal-card shared-model-modal-card">
             <div class="modal-head">
               <div>
                 <h2 id="generator-modal-title">生成 3D 模型</h2>
@@ -325,6 +336,25 @@
             <div id="model-list-items" class="model-list"></div>
           </section>
         </div>
+
+        <div id="online-model-modal" class="modal-shell hidden" role="dialog" aria-modal="true" aria-labelledby="online-model-modal-title">
+          <div class="modal-backdrop" data-close-modal="online-model-modal"></div>
+          <section class="modal-card">
+            <div class="modal-head">
+              <div>
+                <h2 id="online-model-modal-title">线上模型播放</h2>
+                <p>线上模型播放入口已预留，后续可在这里选择云端模型并载入预览器。</p>
+              </div>
+              <button class="modal-close" type="button" data-close-modal="online-model-modal" aria-label="关闭">×</button>
+            </div>
+            <div class="empty-state">该功能暂未开放。</div>
+          </section>
+        </div>
+
+        <template id="shared-model-library-template">
+          <div id="shared-model-feedback" class="empty-state hidden" aria-live="polite"></div>
+          <div id="shared-model-library" class="shared-model-library"></div>
+        </template>
 
         <div id="login-modal" class="modal-shell hidden" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
           <div class="modal-backdrop" data-close-modal="login-modal"></div>

@@ -85,6 +85,7 @@ let uploadedModels = [];
 let currentView = "models";
 let pendingModelAction = null;
 const modelCoverObjectUrls = new Map();
+let modelShareField = null;
 
 bootstrap();
 
@@ -170,6 +171,15 @@ function bindEvents() {
       event.stopPropagation();
       closeModelActionMenus();
       openEditModelDialog(renameButton.dataset.renameModelId);
+      return;
+    }
+
+    const shareButton = event.target.closest("[data-share-model-id]");
+    if (shareButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeModelActionMenus();
+      openShareModelDialog(shareButton.dataset.shareModelId);
       return;
     }
 
@@ -394,6 +404,85 @@ async function editUploadedModel(modelId) {
   }
 }
 
+function ensureModelShareField() {
+  if (modelShareField) return modelShareField;
+  modelShareField = document.createElement("div");
+  modelShareField.id = "model-share-field";
+  modelShareField.className = "share-field hidden";
+  modelShareField.innerHTML = `
+    <p class="share-tip">分享模型可以获得积分奖励</p>
+    <label class="radio-option">
+      <input type="radio" name="model-share-visibility" value="private" checked />
+      <span>私有可见</span>
+    </label>
+    <label class="radio-option">
+      <input type="radio" name="model-share-visibility" value="public" />
+      <span>公开可见</span>
+    </label>
+  `;
+  modelRenameField?.before(modelShareField);
+  return modelShareField;
+}
+
+function setModelShareFieldVisible(visible, visibility = "private") {
+  const field = ensureModelShareField();
+  field.classList.toggle("hidden", !visible);
+  const value = visibility === "public" ? "public" : "private";
+  field.querySelectorAll('input[name="model-share-visibility"]').forEach((input) => {
+    input.checked = input.value === value;
+  });
+}
+
+function getSelectedModelShareVisibility() {
+  const checked = ensureModelShareField().querySelector('input[name="model-share-visibility"]:checked');
+  return checked?.value === "public" ? "public" : "private";
+}
+
+async function shareUploadedModel(modelId) {
+  const model = findRenderableModel(modelId);
+  if (!model) return;
+
+  if (model.localGenerated) {
+    updateGeneratedTaskCache(model, { visibility: getSelectedModelShareVisibility() });
+    renderModels();
+    showFeedback(modelFeedback, "分享设置已保存。本地缓存模型同步到服务器后可获得积分奖励。", "success");
+    return;
+  }
+
+  const data = await fetchJson(`/api/work/models/${encodeURIComponent(modelId)}`, {
+    method: "PATCH",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ visibility: getSelectedModelShareVisibility() })
+  });
+  uploadedModels = data.models || [];
+  storage = data.storage || storage;
+  await refreshMe();
+  renderStorage();
+  renderModels();
+  showFeedback(modelFeedback, "分享设置已保存。", "success");
+}
+
+function openShareModelDialog(modelId) {
+  const model = findRenderableModel(modelId);
+  if (!model) return;
+
+  pendingModelAction = { type: "share", modelId };
+  modelActionTitle.textContent = "分享模型";
+  modelActionMessage.textContent = "选择模型公开可见还是私有可见，默认为私有。";
+  modelRenameInput.value = "";
+  modelRenameField.classList.add("hidden");
+  modelCoverField?.classList.add("hidden");
+  if (modelCoverInput) modelCoverInput.value = "";
+  updateFileInputText(modelCoverInput, modelCoverInputText);
+  setModelShareFieldVisible(true, model.visibility || (model.isPublic ? "public" : "private"));
+  confirmModelActionButton.textContent = "保存";
+  confirmModelActionButton.classList.remove("danger-btn");
+  confirmModelActionButton.classList.add("primary-btn");
+  showFeedback(modelActionFeedback, "");
+  modelActionDialog.classList.remove("hidden");
+  ensureModelShareField().querySelector("input")?.focus();
+}
+
 function openEditModelDialog(modelId) {
   const model = findRenderableModel(modelId);
   if (!model) return;
@@ -404,6 +493,7 @@ function openEditModelDialog(modelId) {
   modelRenameInput.value = model.name || model.entryFile || "";
   modelRenameField.classList.remove("hidden");
   modelCoverField?.classList.remove("hidden");
+  setModelShareFieldVisible(false);
   if (modelCoverInput) modelCoverInput.value = "";
   updateFileInputText(modelCoverInput, modelCoverInputText);
   confirmModelActionButton.textContent = "保存";
@@ -425,6 +515,7 @@ function openDeleteModelDialog(modelId) {
   modelRenameInput.value = "";
   modelRenameField.classList.add("hidden");
   modelCoverField?.classList.add("hidden");
+  setModelShareFieldVisible(false);
   if (modelCoverInput) modelCoverInput.value = "";
   updateFileInputText(modelCoverInput, modelCoverInputText);
   confirmModelActionButton.textContent = "删除";
@@ -442,6 +533,8 @@ async function confirmModelAction() {
   try {
     if (pendingModelAction.type === "edit") {
       await editUploadedModel(pendingModelAction.modelId);
+    } else if (pendingModelAction.type === "share") {
+      await shareUploadedModel(pendingModelAction.modelId);
     } else if (pendingModelAction.type === "delete") {
       await deleteUploadedModel(pendingModelAction.modelId);
     }
@@ -460,6 +553,7 @@ function closeModelActionDialog() {
   modelActionDialog?.classList.add("hidden");
   modelRenameField?.classList.add("hidden");
   modelCoverField?.classList.add("hidden");
+  setModelShareFieldVisible(false);
   if (modelCoverInput) modelCoverInput.value = "";
   updateFileInputText(modelCoverInput, modelCoverInputText);
   showFeedback(modelActionFeedback, "");
@@ -588,6 +682,8 @@ function convertGeneratedTaskToWorkModel(task) {
     modelUrl,
     coverUrl: task.renderedImage || task.thumbnailUrl || persistedModel?.coverUrl || "",
     renderedImage: task.renderedImage || "",
+    visibility: task.visibility || persistedModel?.visibility || "private",
+    isPublic: Boolean(task.isPublic || persistedModel?.isPublic),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     localGenerated: true
@@ -628,11 +724,17 @@ function updateGeneratedTaskCache(model, changes) {
       nextTask.renderedImage = changes.coverUrl;
       nextTask.thumbnailUrl = changes.coverUrl;
     }
+    if (changes.visibility) {
+      nextTask.visibility = changes.visibility;
+      nextTask.isPublic = changes.visibility === "public";
+    }
     if (nextTask.persistedModel) {
       nextTask.persistedModel = {
         ...nextTask.persistedModel,
         name: changes.name || nextTask.persistedModel.name,
-        coverUrl: changes.coverUrl || nextTask.persistedModel.coverUrl
+        coverUrl: changes.coverUrl || nextTask.persistedModel.coverUrl,
+        visibility: changes.visibility || nextTask.persistedModel.visibility,
+        isPublic: changes.visibility ? changes.visibility === "public" : nextTask.persistedModel.isPublic
       };
     }
     return nextTask;
@@ -674,12 +776,14 @@ function renderModelCard(item) {
   const actionMenu = `
         <button class="card-menu-trigger" type="button" data-model-menu-id="${escapeAttribute(item.id)}" aria-label="模型操作" aria-haspopup="menu" aria-expanded="false">...</button>
         <div class="card-action-menu hidden" data-model-menu="${escapeAttribute(item.id)}" role="menu">
+          <button type="button" data-share-model-id="${escapeAttribute(item.id)}" role="menuitem">分享</button>
           <button type="button" data-download-model-id="${escapeAttribute(item.id)}" role="menuitem">下载</button>
           <button type="button" data-rename-model-id="${escapeAttribute(item.id)}" role="menuitem">修改</button>
           <button class="danger" type="button" data-delete-model-id="${escapeAttribute(item.id)}" role="menuitem">删除</button>
         </div>
       `;
   const paramsText = buildModelParamsText(item);
+  const isPublic = item.visibility === "public" || item.isPublic;
 
   return `
     <article class="model-card">
@@ -689,6 +793,7 @@ function renderModelCard(item) {
           <h2>${escapeHtml(title)}</h2>
           <div class="model-meta">
             <span>${escapeHtml(time)}</span>
+            ${isPublic ? `<span class="visibility-pill public">公开</span>` : ""}
           </div>
           ${paramsText ? `<p class="model-params">${escapeHtml(paramsText)}</p>` : ""}
         </div>
@@ -894,7 +999,7 @@ function renderCredits() {
     return `
       <article class="record-item">
         <div>
-          <strong>${escapeHtml(record.title || "积分记录")}</strong>
+          <strong>${escapeHtml(formatCreditRecordTitle(record))}</strong>
           <span class="muted">${escapeHtml(formatTime(record.createdAt))} · 余额 ${escapeHtml(record.balance)}</span>
           ${record.note ? `<p class="muted">${escapeHtml(record.note)}</p>` : ""}
         </div>
@@ -902,6 +1007,13 @@ function renderCredits() {
       </article>
     `;
   }).join("");
+}
+
+function formatCreditRecordTitle(record) {
+  if (record?.title) return record.title;
+  if (record?.type === "share_gift") return "分享赠送";
+  if (record?.type === "share_cancel_deduct") return "取消分享扣分";
+  return "积分记录";
 }
 
 function renderProfile() {
