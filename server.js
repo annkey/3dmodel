@@ -6,6 +6,7 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 const { Readable } = require("node:stream");
 const { URL } = require("node:url");
+const { Pool } = require("pg");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -21,6 +22,7 @@ loadEnvFile(envPath);
 
 const PORT = Number(process.env.PORT || 3000);
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || "kmax1224";
+const DATABASE_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.PG_DATABASE_URL || "";
 const TRIPO_API_KEY = process.env.TRIPO_API_KEY || "";
 const TRIPO_API_BASE = "https://api.tripo3d.ai/v2/openapi";
 const MESHY_API_KEY = process.env.MESHY_API_KEY || "";
@@ -60,6 +62,15 @@ const generatedTaskRecords = new Map();
 const generatedTaskPersistPromises = new Map();
 const playerClientSessions = new Map();
 const authSessions = new Map();
+const runtimeStores = {
+  generatorSettings: null,
+  adminUsers: null,
+  userCredits: null,
+  authSessions: null,
+  userModels: null
+};
+const runtimeStorePersistPromises = new Map();
+let pgPool = null;
 const PLAYER_CLIENT_ACTIVE_MS = 2 * 60 * 1000;
 const AUTH_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CREDIT_COSTS = {
@@ -158,6 +169,7 @@ const server = http.createServer(async (req, res) => {
 
     if (requestUrl.pathname.startsWith("/api/")) {
       await handleApi(req, res, requestUrl);
+      await flushRuntimeStorePersists();
       return;
     }
 
@@ -170,9 +182,133 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`3D app running at http://localhost:${PORT}`);
+startServer().catch((error) => {
+  console.error("Server startup failed", error);
+  process.exitCode = 1;
 });
+
+async function startServer() {
+  await initializeRuntimeDatabase();
+  server.listen(PORT, () => {
+    console.log(`3D app running at http://localhost:${PORT}`);
+  });
+}
+
+async function initializeRuntimeDatabase() {
+  if (!DATABASE_URL) {
+    return;
+  }
+
+  pgPool = new Pool({
+    connectionString: DATABASE_URL,
+    ssl: shouldUsePostgresSsl() ? { rejectUnauthorized: false } : undefined
+  });
+
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS app_runtime_stores (
+      store_key TEXT PRIMARY KEY,
+      store_value JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  runtimeStores.generatorSettings = await loadRuntimeStore("generator_settings", readGeneratorSettingsJsonFile());
+  runtimeStores.adminUsers = await loadRuntimeStore("admin_users", readAdminUsersJsonFile());
+  runtimeStores.userCredits = await loadRuntimeStore("user_credits", readUserCreditsJsonFile());
+  runtimeStores.authSessions = await loadRuntimeStore("auth_sessions", readAuthSessionsJsonFile());
+  runtimeStores.userModels = await loadRuntimeStore("user_models", readUserModelIndexJsonFile());
+  console.log("Runtime data store: PostgreSQL");
+}
+
+function shouldUsePostgresSsl() {
+  const value = String(process.env.DATABASE_SSL || process.env.PGSSLMODE || "").toLowerCase();
+  return ["1", "true", "require", "required", "verify-ca", "verify-full"].includes(value);
+}
+
+async function loadRuntimeStore(storeKey, fallbackValue) {
+  const result = await pgPool.query("SELECT store_value FROM app_runtime_stores WHERE store_key = $1", [storeKey]);
+  if (result.rows[0]?.store_value) {
+    return result.rows[0].store_value;
+  }
+
+  await persistRuntimeStore(storeKey, fallbackValue);
+  return fallbackValue;
+}
+
+function queueRuntimeStorePersist(storeKey, value) {
+  if (!pgPool) {
+    return null;
+  }
+
+  const pending = (runtimeStorePersistPromises.get(storeKey) || Promise.resolve())
+    .catch(() => {})
+    .then(() => persistRuntimeStore(storeKey, value))
+    .catch((error) => {
+      console.error(`Failed to persist runtime store ${storeKey}`, error);
+    })
+    .finally(() => {
+      if (runtimeStorePersistPromises.get(storeKey) === pending) {
+        runtimeStorePersistPromises.delete(storeKey);
+      }
+    });
+  runtimeStorePersistPromises.set(storeKey, pending);
+  return pending;
+}
+
+async function persistRuntimeStore(storeKey, value) {
+  if (!pgPool) {
+    return;
+  }
+
+  await pgPool.query(
+    `INSERT INTO app_runtime_stores (store_key, store_value, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (store_key)
+     DO UPDATE SET store_value = EXCLUDED.store_value, updated_at = NOW()`,
+    [storeKey, JSON.stringify(value)]
+  );
+}
+
+async function flushRuntimeStorePersists() {
+  if (!runtimeStorePersistPromises.size) {
+    return;
+  }
+
+  const pending = Array.from(runtimeStorePersistPromises.values());
+  await Promise.allSettled(pending);
+}
+
+function readJsonFile(filePath, fallbackValue) {
+  if (!fs.existsSync(filePath)) {
+    return fallbackValue;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return fallbackValue;
+  }
+}
+
+function readGeneratorSettingsJsonFile() {
+  return readJsonFile(generatorSettingsPath, {});
+}
+
+function readAdminUsersJsonFile() {
+  return readJsonFile(adminUsersPath, { users: [createDefaultAdminUser()] });
+}
+
+function readUserCreditsJsonFile() {
+  return readJsonFile(userCreditsPath, { balances: {}, records: [] });
+}
+
+function readAuthSessionsJsonFile() {
+  return readJsonFile(authSessionsPath, { sessions: [] });
+}
+
+function readUserModelIndexJsonFile() {
+  return readJsonFile(userModelIndexPath, { models: [] });
+}
 
 async function handleApi(req, res, requestUrl) {
   if (req.method === "GET" && requestUrl.pathname === "/api/config") {
@@ -2392,12 +2528,12 @@ function cleanupAuthSessions() {
 }
 
 function loadAuthSessions() {
-  if (authSessions.size || !fs.existsSync(authSessionsPath)) {
+  if (authSessions.size) {
     return;
   }
 
   try {
-    const parsed = JSON.parse(fs.readFileSync(authSessionsPath, "utf8"));
+    const parsed = runtimeStores.authSessions || readAuthSessionsJsonFile();
     const sessions = Array.isArray(parsed?.sessions) ? parsed.sessions : [];
     for (const session of sessions) {
       const token = normalizeText(session?.token);
@@ -2418,7 +2554,13 @@ function writeAuthSessionsFile() {
   const sessions = Array.from(authSessions.values()).filter((session) => (
     session?.token && Date.parse(session.expiresAt || 0) > Date.now()
   ));
-  fs.writeFileSync(authSessionsPath, `${JSON.stringify({ sessions }, null, 2)}\n`);
+  const payload = { sessions };
+  runtimeStores.authSessions = payload;
+  if (pgPool) {
+    queueRuntimeStorePersist("auth_sessions", payload);
+    return;
+  }
+  fs.writeFileSync(authSessionsPath, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 function getPublicUserById(userId) {
@@ -2585,12 +2727,8 @@ function readAdminUsersFile() {
     users: [createDefaultAdminUser()]
   };
 
-  if (!fs.existsSync(adminUsersPath)) {
-    return fallback;
-  }
-
   try {
-    const data = JSON.parse(fs.readFileSync(adminUsersPath, "utf8"));
+    const data = runtimeStores.adminUsers || readAdminUsersJsonFile();
     const users = Array.isArray(data?.users) ? data.users : [];
     const normalizedUsers = users
       .map(normalizeStoredAdminUser)
@@ -2618,6 +2756,11 @@ function writeAdminUsersFile(store) {
     }))
   };
 
+  runtimeStores.adminUsers = payload;
+  if (pgPool) {
+    queueRuntimeStorePersist("admin_users", payload);
+    return;
+  }
   fs.writeFileSync(adminUsersPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 }
 
@@ -2726,12 +2869,8 @@ function readUserCreditsFile() {
     records: []
   };
 
-  if (!fs.existsSync(userCreditsPath)) {
-    return fallback;
-  }
-
   try {
-    const parsed = JSON.parse(fs.readFileSync(userCreditsPath, "utf8"));
+    const parsed = runtimeStores.userCredits || readUserCreditsJsonFile();
     return normalizeUserCreditStore(parsed);
   } catch {
     return fallback;
@@ -2739,7 +2878,13 @@ function readUserCreditsFile() {
 }
 
 function writeUserCreditsFile(store) {
-  fs.writeFileSync(userCreditsPath, `${JSON.stringify(normalizeUserCreditStore(store), null, 2)}\n`);
+  const payload = normalizeUserCreditStore(store);
+  runtimeStores.userCredits = payload;
+  if (pgPool) {
+    queueRuntimeStorePersist("user_credits", payload);
+    return;
+  }
+  fs.writeFileSync(userCreditsPath, `${JSON.stringify(payload, null, 2)}\n`);
 }
 
 function normalizeUserCreditStore(store) {
@@ -2994,12 +3139,8 @@ function revokeRecentModelShareCredits(userId, modelId) {
 }
 
 function readUserModelIndexFile() {
-  if (!fs.existsSync(userModelIndexPath)) {
-    return { models: [] };
-  }
-
   try {
-    const parsed = JSON.parse(fs.readFileSync(userModelIndexPath, "utf8"));
+    const parsed = runtimeStores.userModels || readUserModelIndexJsonFile();
     return {
       models: Array.isArray(parsed?.models) ? parsed.models.map(normalizeUserModelRecord).filter(Boolean) : []
     };
@@ -3010,7 +3151,13 @@ function readUserModelIndexFile() {
 
 function writeUserModelIndexFile(store) {
   const models = Array.isArray(store?.models) ? store.models.map(normalizeUserModelRecord).filter(Boolean) : [];
-  fs.writeFileSync(userModelIndexPath, `${JSON.stringify({ models }, null, 2)}\n`, "utf8");
+  const payload = { models };
+  runtimeStores.userModels = payload;
+  if (pgPool) {
+    queueRuntimeStorePersist("user_models", payload);
+    return;
+  }
+  fs.writeFileSync(userModelIndexPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 }
 
 function normalizeUserModelRecord(record) {
@@ -4273,7 +4420,12 @@ function saveGeneratorSettings(payload) {
     modelVersion
   };
 
-  fs.writeFileSync(generatorSettingsPath, `${JSON.stringify(nextSettings, null, 2)}\n`, "utf8");
+  runtimeStores.generatorSettings = nextSettings;
+  if (pgPool) {
+    queueRuntimeStorePersist("generator_settings", nextSettings);
+  } else {
+    fs.writeFileSync(generatorSettingsPath, `${JSON.stringify(nextSettings, null, 2)}\n`, "utf8");
+  }
 
   return {
     ...nextSettings,
@@ -4282,12 +4434,8 @@ function saveGeneratorSettings(payload) {
 }
 
 function readGeneratorSettingsFile() {
-  if (!fs.existsSync(generatorSettingsPath)) {
-    return {};
-  }
-
   try {
-    return JSON.parse(fs.readFileSync(generatorSettingsPath, "utf8"));
+    return runtimeStores.generatorSettings || readGeneratorSettingsJsonFile();
   } catch {
     return {};
   }

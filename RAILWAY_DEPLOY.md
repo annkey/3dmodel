@@ -22,11 +22,26 @@
 ```env
 TRIPO_API_KEY=你的新Tripo密钥
 MESHY_API_KEY=你的新Meshy密钥
+DEFAULT_ADMIN_PASSWORD=你的临时管理员初始密码
 ```
 
 说明：
 - `PORT` 不需要手动填，Railway 会自动注入
+- 推荐在 Railway 项目里添加 PostgreSQL 服务，Railway 会自动注入 `DATABASE_URL`
+- 如果使用外部 PostgreSQL 且要求 SSL，可添加 `DATABASE_SSL=require`
 - 不要继续使用已经在聊天中暴露过的旧密钥，建议先轮换
+
+## 数据库持久化
+
+当前服务检测到 `DATABASE_URL` 后，会自动创建 `app_runtime_stores` 表，并把这些运行时数据写入 PostgreSQL：
+
+- 管理后台用户：`admin-users.json`
+- 登录会话：`auth-sessions.json`
+- 积分：`user-credits.json`
+- 模型索引：`user-models.json`
+- 公共生成配置：`generator-settings.json`
+
+没有 `DATABASE_URL` 时，本地开发仍会继续使用 JSON 文件。线上 Railway 推荐添加 PostgreSQL 服务，避免每次重新部署后用户和积分数据丢失。
 
 ## 部署后检查
 
