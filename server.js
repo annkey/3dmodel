@@ -20,6 +20,7 @@ const userModelIndexPath = path.join(rootDir, "user-models.json");
 loadEnvFile(envPath);
 
 const PORT = Number(process.env.PORT || 3000);
+const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || "kmax1224";
 const TRIPO_API_KEY = process.env.TRIPO_API_KEY || "";
 const TRIPO_API_BASE = "https://api.tripo3d.ai/v2/openapi";
 const MESHY_API_KEY = process.env.MESHY_API_KEY || "";
@@ -2520,7 +2521,7 @@ function createDefaultAdminUser() {
     role: "admin",
     disabled: false,
     modelStorageQuotaBytes: DEFAULT_USER_MODEL_STORAGE_QUOTA_BYTES,
-    password: null,
+    password: buildPasswordRecord(DEFAULT_ADMIN_PASSWORD),
     createdAt: now,
     updatedAt: now
   };
@@ -2539,10 +2540,22 @@ function normalizeStoredAdminUser(user) {
     role: normalizeAdminRole(user?.role, "user"),
     disabled: Boolean(user?.disabled),
     modelStorageQuotaBytes: normalizeStorageQuotaBytes(user?.modelStorageQuotaBytes),
-    password: user?.password && typeof user.password === "object" ? user.password : null,
+    password: normalizeBootstrapAdminPassword(user, username),
     createdAt: normalizeText(user?.createdAt) || new Date().toISOString(),
     updatedAt: normalizeText(user?.updatedAt) || normalizeText(user?.createdAt) || new Date().toISOString()
   };
+}
+
+function normalizeBootstrapAdminPassword(user, username) {
+  if (user?.password && typeof user.password === "object") {
+    return user.password;
+  }
+
+  if (String(user?.id || "").toLowerCase() === "admin" || String(username || "").toLowerCase() === "admin") {
+    return buildPasswordRecord(DEFAULT_ADMIN_PASSWORD);
+  }
+
+  return null;
 }
 
 function normalizeAdminUsername(value) {
