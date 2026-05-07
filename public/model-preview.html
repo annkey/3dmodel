@@ -60,6 +60,20 @@
             <button id="open-generator-modal" class="action-btn" type="button">AI生成模型</button>
             <button id="open-optimizer-modal" class="action-btn action-btn-secondary" type="button">AI模型优化</button>
             <button id="open-model-list-modal" class="action-btn action-btn-secondary" type="button">3D模型列表</button>
+            <div id="user-menu" class="user-menu hidden">
+              <button id="user-menu-trigger" class="user-menu-trigger" type="button" aria-label="用户信息">
+                <span id="user-avatar" class="user-avatar">U</span>
+              </button>
+              <div id="user-menu-panel" class="user-menu-panel hidden">
+                <div class="user-menu-info">
+                  <strong id="user-display-name">用户</strong>
+                  <span id="user-role-text">普通用户</span>
+                </div>
+                <a class="user-menu-item" href="/model-work.html" target="_blank" rel="noopener">用户中心</a>
+                <a id="admin-entry-link" class="user-menu-item hidden" href="/model-setting.html" target="_blank" rel="noopener">管理后台</a>
+                <button id="logout-button" class="user-menu-item" type="button">退出登录</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -169,9 +183,13 @@
                 <textarea id="generator-prompt" name="prompt" rows="4" placeholder="例如：一朵高细节的白粉色百合花，摄影棚灯光，写实材质"></textarea>
               </label>
 
-              <label class="form-field hidden" id="generator-image-field">
+              <label class="form-field file-field hidden" id="generator-image-field">
                 <span>参考图片</span>
-                <input id="generator-image" name="image" type="file" accept="image/png,image/jpeg,image/webp" />
+                <span class="file-picker">
+                  <input id="generator-image" name="image" type="file" accept="image/png,image/jpeg,image/webp" />
+                  <span class="file-button">选择文件</span>
+                  <span id="generator-image-text" class="file-name">未选择任何文件</span>
+                </span>
               </label>
 
               <div class="form-grid">
@@ -224,9 +242,13 @@
                   <textarea id="optimizer-texture-prompt" name="texturePrompt" rows="4" placeholder="例如：拉丝铝金属机身，边缘轻微磨损，生成清晰 PBR 细节"></textarea>
                 </label>
 
-                <label class="form-field">
+                <label class="form-field file-field">
                   <span>风格参考图（可选）</span>
-                  <input id="optimizer-style-image" name="styleImage" type="file" accept="image/png,image/jpeg,image/webp" />
+                  <span class="file-picker">
+                    <input id="optimizer-style-image" name="styleImage" type="file" accept="image/png,image/jpeg,image/webp" />
+                    <span class="file-button">选择文件</span>
+                    <span id="optimizer-style-image-text" class="file-name">未选择任何文件</span>
+                  </span>
                 </label>
 
                 <div class="form-grid">
@@ -301,6 +323,43 @@
 
             <div id="model-list-empty" class="empty-state">还没有生成记录，先创建一个 3D 模型吧。</div>
             <div id="model-list-items" class="model-list"></div>
+          </section>
+        </div>
+
+        <div id="login-modal" class="modal-shell hidden" role="dialog" aria-modal="true" aria-labelledby="login-modal-title">
+          <div class="modal-backdrop" data-close-modal="login-modal"></div>
+          <section class="login-card">
+            <div class="login-visual" aria-hidden="true">
+              <div class="login-model-scene">
+                <div class="login-model-ring ring-a"></div>
+                <div class="login-model-ring ring-b"></div>
+                <div class="login-model">
+                  <span class="login-model-core"></span>
+                  <span class="login-model-face face-a"></span>
+                  <span class="login-model-face face-b"></span>
+                  <span class="login-model-face face-c"></span>
+                </div>
+                <span class="login-model-node node-a"></span>
+                <span class="login-model-node node-b"></span>
+                <span class="login-model-node node-c"></span>
+              </div>
+            </div>
+            <form id="login-form" class="login-form">
+              <div class="login-head">
+                <h2 id="login-modal-title">欢迎登录</h2>
+                <button class="modal-close" type="button" data-close-modal="login-modal" aria-label="关闭">×</button>
+              </div>
+              <label class="login-field">
+                <span class="login-field-icon" aria-hidden="true">U</span>
+                <input id="login-username" name="username" autocomplete="username" placeholder="用户名" required />
+              </label>
+              <label class="login-field">
+                <span class="login-field-icon" aria-hidden="true">#</span>
+                <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="登录密码" required />
+              </label>
+              <div id="login-feedback" class="login-feedback hidden" aria-live="polite"></div>
+              <button id="login-submit" class="login-submit" type="submit">登 录</button>
+            </form>
           </section>
         </div>
 

@@ -15,6 +15,7 @@ import {
   DEFAULT_PANORAMA_URL,
   GENERATED_TASK_STORAGE_KEY,
   GENERATOR_PROVIDER_CONFIG,
+  LOCAL_MODEL_STORAGE_KEY,
   OPTIMIZER_PROVIDER_CONFIG,
   PREVIEW_TASK_STORAGE_LIMIT,
   RECENT_STORAGE_KEY,
@@ -99,6 +100,21 @@ const meshMetric = document.getElementById("mesh-metric");
 const generatorModal = document.getElementById("generator-modal");
 const optimizerModal = document.getElementById("optimizer-modal");
 const modelListModal = document.getElementById("model-list-modal");
+const modelListModalTitle = document.getElementById("model-list-modal-title");
+const loginModal = document.getElementById("login-modal");
+const loginForm = document.getElementById("login-form");
+const loginUsernameInput = document.getElementById("login-username");
+const loginPasswordInput = document.getElementById("login-password");
+const loginFeedback = document.getElementById("login-feedback");
+const loginSubmitButton = document.getElementById("login-submit");
+const userMenu = document.getElementById("user-menu");
+const userMenuTrigger = document.getElementById("user-menu-trigger");
+const userMenuPanel = document.getElementById("user-menu-panel");
+const userAvatar = document.getElementById("user-avatar");
+const userDisplayName = document.getElementById("user-display-name");
+const userRoleText = document.getElementById("user-role-text");
+const adminEntryLink = document.getElementById("admin-entry-link");
+const logoutButton = document.getElementById("logout-button");
 const generatorForm = document.getElementById("generator-form");
 const generatorModeSelect = document.getElementById("generator-mode");
 const generatorConfigSummary = document.getElementById("generator-config-summary");
@@ -106,6 +122,7 @@ const generatorPromptField = document.getElementById("generator-prompt-field");
 const generatorPromptInput = document.getElementById("generator-prompt");
 const generatorImageField = document.getElementById("generator-image-field");
 const generatorImageInput = document.getElementById("generator-image");
+const generatorImageText = document.getElementById("generator-image-text");
 const generatorTextureQualitySelect = document.getElementById("generator-texture-quality");
 const generatorGeometryQualitySelect = document.getElementById("generator-geometry-quality");
 const generatorNegativePromptInput = document.getElementById("generator-negative-prompt");
@@ -118,6 +135,7 @@ const optimizerRetextureFields = document.getElementById("optimizer-retexture-fi
 const optimizerSplitFields = document.getElementById("optimizer-split-fields");
 const optimizerTexturePromptInput = document.getElementById("optimizer-texture-prompt");
 const optimizerStyleImageInput = document.getElementById("optimizer-style-image");
+const optimizerStyleImageText = document.getElementById("optimizer-style-image-text");
 const optimizerPreserveUvInput = document.getElementById("optimizer-preserve-uv");
 const optimizerEnablePbrInput = document.getElementById("optimizer-enable-pbr");
 const optimizerRemoveLightingInput = document.getElementById("optimizer-remove-lighting");
@@ -205,10 +223,14 @@ let dismissedTaskProgressId = "";
 let autoPlayingGeneratedTaskId = "";
 let modelLoadRequestId = 0;
 let activePlaybackLoadingTaskId = "";
+let syncingGeneratedModelsPromise = null;
+let lastGeneratedModelSyncAt = 0;
 let playbackLoadTimeoutId = null;
 let playbackLoadProgressPercent = 0;
 let playbackLoadKnownTotalBytes = 0;
 let currentModelFileSizeBytes = 0;
+let authSession = null;
+let pendingAuthAction = null;
 let explodeParts = [];
 let explodeProgress = 0;
 let explodeTarget = 0;
@@ -224,6 +246,8 @@ let suppressNextViewerClick = false;
 let activePointerManipulation = null;
 
 const MODEL_PLAYBACK_TIMEOUT_MS = 120000;
+const AUTH_STORAGE_KEY = "kmax-model-preview-auth";
+const GENERATED_MODEL_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const EXPLODE_DISTANCE_SCALE = 0.32;
 const EXPLODE_ANIMATION_SPEED = 8;
 const STYLUS_HELPER_BASE_OFFSET = 0.01;
@@ -465,6 +489,12 @@ const THEME_SETTINGS = {
 bootstrap();
 
 async function bootstrap() {
+  if (openModelListModalButton) {
+    openModelListModalButton.textContent = "AI生模列表";
+  }
+  if (modelListModalTitle) {
+    modelListModalTitle.textContent = "AI生模列表";
+  }
   stereoEffect = new KStereoEffect(renderer);
   stereoEffect.setSize(window.innerWidth, window.innerHeight);
   stereoEffect.setViewScale(1);
@@ -520,21 +550,33 @@ async function bootstrap() {
     highlightSelectedEntry();
     void handleLoadModel();
   });
-  openGeneratorModalButton.addEventListener("click", () => openModal(generatorModal));
+  openGeneratorModalButton.addEventListener("click", () => {
+    requireLogin(() => openModal(generatorModal), "请先登录后再使用 AI 生成模型。");
+  });
   openOptimizerModalButton?.addEventListener("click", () => {
-    syncOptimizerFormState();
-    openModal(optimizerModal);
+    requireLogin(() => {
+      syncOptimizerFormState();
+      openModal(optimizerModal);
+    }, "请先登录后再使用 AI 模型优化。");
   });
   openModelListModalButton.addEventListener("click", () => {
-    renderGeneratedTaskList();
-    openModal(modelListModal);
+    requireLogin(() => {
+      renderGeneratedTaskList();
+      void syncGeneratedTasksFromServer();
+      openModal(modelListModal);
+    }, "请先登录后再查看 AI生模列表。");
   });
   taskProgressOpenListButton.addEventListener("click", () => {
-    renderGeneratedTaskList();
-    openModal(modelListModal);
+    requireLogin(() => {
+      renderGeneratedTaskList();
+      void syncGeneratedTasksFromServer();
+      openModal(modelListModal);
+    }, "请先登录后再查看 AI生模列表。");
   });
   taskProgressCloseButton?.addEventListener("click", dismissTaskProgressOverlay);
   generatorModeSelect.addEventListener("change", syncGeneratorModeFieldState);
+  generatorImageInput?.addEventListener("change", () => updateFileInputText(generatorImageInput, generatorImageText));
+  optimizerStyleImageInput?.addEventListener("change", () => updateFileInputText(optimizerStyleImageInput, optimizerStyleImageText));
   optimizerOperationSelect?.addEventListener("change", syncOptimizerFormState);
   generatorForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -543,6 +585,16 @@ async function bootstrap() {
   optimizerForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     void handleOptimizerSubmit();
+  });
+  loginForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void handleLoginSubmit();
+  });
+  userMenuTrigger?.addEventListener("click", () => {
+    userMenuPanel?.classList.toggle("hidden");
+  });
+  logoutButton?.addEventListener("click", () => {
+    void handleLogout();
   });
   optimizerPlayResultButton?.addEventListener("click", () => void playOptimizationResult());
   optimizerDownloadResultButton?.addEventListener("click", downloadOptimizationResult);
@@ -554,6 +606,11 @@ async function bootstrap() {
   });
   document.addEventListener("fullscreenchange", handleFullscreenChange);
   document.addEventListener("keydown", handleGlobalKeydown);
+  document.addEventListener("click", (event) => {
+    if (!userMenu?.contains(event.target)) {
+      userMenuPanel?.classList.add("hidden");
+    }
+  });
   window.addEventListener("resize", handleResize);
   renderer.domElement.addEventListener("pointerdown", handleViewerPointerDown);
   renderer.domElement.addEventListener("pointermove", handleViewerPointerMove);
@@ -586,6 +643,7 @@ async function bootstrap() {
   setupStereoTracking();
   loadRecentEntries();
   loadGeneratedTasks();
+  restoreAuthSession();
   if (themeSelect.value === "panorama") {
     await ensureDefaultPanoramaLoaded();
   }
@@ -621,7 +679,9 @@ async function bootstrap() {
   syncGeneratorFormForProvider();
   syncGeneratorModeFieldState();
   syncOptimizerFormState();
+  void syncGeneratedTasksFromServer({ silent: true });
   resumePendingGeneratedTasks();
+  loadModelFromUrlParams();
 }
 
 function setupStereoTracking() {
@@ -705,6 +765,7 @@ function handleGlobalKeydown(event) {
   closeModal(generatorModal);
   closeModal(optimizerModal);
   closeModal(modelListModal);
+  closeModal(loginModal);
 }
 
 function openModal(modal) {
@@ -723,6 +784,166 @@ function closeModal(modal) {
   modal.classList.add("hidden");
 }
 
+function restoreAuthSession() {
+  const stored = parseStoredJson(AUTH_STORAGE_KEY, null);
+  if (!stored?.token || !stored?.user) {
+    setAuthSession(null);
+    return;
+  }
+
+  if (stored.expiresAt && Date.parse(stored.expiresAt) <= Date.now()) {
+    clearAuthSession();
+    return;
+  }
+
+  setAuthSession(stored);
+  void refreshAuthSession();
+}
+
+async function refreshAuthSession() {
+  if (!authSession?.token) {
+    return;
+  }
+
+  try {
+    const data = await fetchJson("/api/auth/session", {
+      headers: getAuthHeaders()
+    });
+    setAuthSession({
+      token: data.token || authSession.token,
+      expiresAt: data.expiresAt,
+      user: data.user
+    });
+  } catch {
+    clearAuthSession();
+  }
+}
+
+function requireLogin(action, message = "请先登录后再继续操作。") {
+  if (authSession?.token && authSession?.user) {
+    action?.();
+    return true;
+  }
+
+  pendingAuthAction = action || null;
+  showLoginFeedback(message, "info");
+  openModal(loginModal);
+  window.setTimeout(() => loginUsernameInput?.focus(), 0);
+  return false;
+}
+
+async function handleLoginSubmit() {
+  const username = loginUsernameInput?.value.trim() || "";
+  const password = loginPasswordInput?.value || "";
+
+  if (!username || !password) {
+    showLoginFeedback("请输入用户名和密码。");
+    return;
+  }
+
+  loginSubmitButton.disabled = true;
+  loginSubmitButton.textContent = "登录中...";
+  showLoginFeedback("");
+
+  try {
+    const data = await fetchJson("/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    setAuthSession({
+      token: data.token,
+      expiresAt: data.expiresAt,
+      user: data.user
+    });
+    loginPasswordInput.value = "";
+    closeModal(loginModal);
+    setStatus("登录成功");
+    void syncGeneratedTasksFromServer({ silent: true, force: true });
+
+    const action = pendingAuthAction;
+    pendingAuthAction = null;
+    action?.();
+  } catch (error) {
+    showLoginFeedback(error.message || "登录失败，请检查用户名和密码。");
+  } finally {
+    loginSubmitButton.disabled = false;
+    loginSubmitButton.textContent = "登 录";
+  }
+}
+
+async function handleLogout() {
+  const headers = getAuthHeaders();
+  clearAuthSession();
+  pendingAuthAction = null;
+  closeModal(generatorModal);
+  closeModal(optimizerModal);
+  closeModal(modelListModal);
+  userMenuPanel?.classList.add("hidden");
+  setStatus("已退出登录");
+
+  try {
+    await fetchJson("/api/auth/logout", {
+      method: "POST",
+      headers
+    });
+  } catch {}
+}
+
+function setAuthSession(session) {
+  authSession = session?.token && session?.user ? session : null;
+
+  if (authSession) {
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authSession));
+  }
+
+  renderAuthState();
+}
+
+function clearAuthSession() {
+  authSession = null;
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  renderAuthState();
+}
+
+function renderAuthState() {
+  const user = authSession?.user || null;
+  userMenu?.classList.toggle("hidden", !user);
+  userMenuPanel?.classList.add("hidden");
+
+  if (!user) {
+    return;
+  }
+
+  const displayName = user.displayName || user.username || "用户";
+  userAvatar.textContent = getUserInitial(displayName);
+  userDisplayName.textContent = displayName;
+  userRoleText.textContent = user.roleText || (user.role === "admin" ? "管理员" : "普通用户");
+  adminEntryLink?.classList.toggle("hidden", user.role !== "admin");
+}
+
+function getAuthHeaders() {
+  return authSession?.token ? { Authorization: `Bearer ${authSession.token}` } : {};
+}
+
+function getUserInitial(name) {
+  const text = String(name || "U").trim();
+  return (text[0] || "U").toUpperCase();
+}
+
+function showLoginFeedback(message, type = "error") {
+  if (!loginFeedback) {
+    return;
+  }
+
+  loginFeedback.textContent = message || "";
+  loginFeedback.classList.toggle("hidden", !message);
+  loginFeedback.classList.toggle("info", type === "info");
+}
+
 function dismissTaskProgressOverlay() {
   if (!activeGeneratingTaskId) {
     updateTaskProgressOverlay(null);
@@ -731,7 +952,7 @@ function dismissTaskProgressOverlay() {
 
   dismissedTaskProgressId = activeGeneratingTaskId;
   updateTaskProgressOverlay(null);
-  setStatus("生成任务仍在后台进行，可在 3D 模型列表里继续查看进度");
+  setStatus("生成任务仍在后台进行，可在 AI生模列表里继续查看进度");
 }
 
 function fillSelectOptions(select, options, selectedValue) {
@@ -961,7 +1182,31 @@ function syncGeneratorModeFieldState() {
   generatorImageField.classList.toggle("hidden", mode !== "image");
 }
 
+function updateFileInputText(input, output) {
+  if (!input || !output) return;
+  const files = Array.from(input.files || []);
+  if (!files.length) {
+    output.textContent = "未选择任何文件";
+    output.title = "";
+    return;
+  }
+
+  if (files.length === 1) {
+    output.textContent = files[0].name;
+    output.title = files[0].name;
+    return;
+  }
+
+  const text = `${files.length} 个文件：${files[0].name} 等`;
+  output.textContent = text;
+  output.title = files.map((file) => file.name).join("\n");
+}
+
 async function handleGeneratorSubmit() {
+  if (!requireLogin(null, "请先登录后再使用 AI 生成模型。")) {
+    return;
+  }
+
   const activeConfig = getActiveGeneratorConfig();
   const provider = activeConfig.provider;
   const providerConfig = GENERATOR_PROVIDER_CONFIG[provider];
@@ -1060,6 +1305,10 @@ async function handleGeneratorSubmit() {
 }
 
 async function handleOptimizerSubmit() {
+  if (!requireLogin(null, "请先登录后再使用 AI 模型优化。")) {
+    return;
+  }
+
   const activeConfig = getActiveOptimizerConfig();
   const provider = activeConfig.provider;
   const operation = optimizerOperationSelect.value === "split" ? "split" : "retexture";
@@ -1170,6 +1419,7 @@ async function submitOptimizerTask({ provider, operation, target, modelVersion }
 
   return fetchJson("/api/model-optimize", {
     method: "POST",
+    headers: getAuthHeaders(),
     body: payload
   });
 }
@@ -1328,6 +1578,7 @@ async function submitGeneratorTask({
 
   return fetchJson("/api/generate", {
     method: "POST",
+    headers: getAuthHeaders(),
     body: payload
   });
 }
@@ -1338,6 +1589,108 @@ function loadGeneratedTasks() {
     parseStoredJson
   });
   renderGeneratedTaskList();
+}
+
+async function syncGeneratedTasksFromServer(options = {}) {
+  if (!authSession?.token) {
+    return [];
+  }
+
+  const now = Date.now();
+  if (!options.force && lastGeneratedModelSyncAt && now - lastGeneratedModelSyncAt < GENERATED_MODEL_SYNC_INTERVAL_MS) {
+    return generatedTasks;
+  }
+
+  if (syncingGeneratedModelsPromise) {
+    return syncingGeneratedModelsPromise;
+  }
+
+  syncingGeneratedModelsPromise = (async () => {
+    try {
+      const data = await fetchJson("/api/work/models", {
+        headers: getAuthHeaders()
+      });
+      const aiTasks = (data.models || [])
+        .filter((model) => model.source === "ai" || model.generatedTaskId)
+        .map(convertUserModelToGeneratedTask);
+
+      for (const task of aiTasks) {
+        upsertGeneratedTask(task);
+      }
+
+      renderGeneratedTaskList();
+      lastGeneratedModelSyncAt = Date.now();
+      return aiTasks;
+    } catch (error) {
+      if (!options.silent) {
+        setStatus(error.message || "AI生模列表同步失败");
+      }
+      return [];
+    } finally {
+      syncingGeneratedModelsPromise = null;
+    }
+  })();
+
+  return syncingGeneratedModelsPromise;
+}
+
+function convertUserModelToGeneratedTask(model) {
+  const taskId = model.generatedTaskId || model.id;
+  const format = String(model.format || inferFormatFromUrl(model.modelUrl || "") || "").toLowerCase();
+  const prompt = model.generationParams?.prompt || model.name || taskId;
+  return {
+    id: taskId,
+    taskId,
+    provider: model.provider || "",
+    providerName: model.providerName || model.sourceText || "AI生成",
+    mode: model.mode || "text",
+    displayModelVersion: model.displayModelVersion || "",
+    fileSizeBytes: Number(model.fileSizeBytes || 0),
+    prompt,
+    status: "success",
+    statusText: "success",
+    stageText: "已保存到模型库",
+    progress: 100,
+    finalized: true,
+    preferredModelUrl: model.modelUrl || "",
+    renderedImage: model.coverUrl || "",
+    persistedModel: model,
+    persistError: null,
+    modelUrls: {
+      model: model.modelUrl || "",
+      glb: format === "glb" ? model.modelUrl || "" : "",
+      fbx: format === "fbx" ? model.modelUrl || "" : "",
+      obj: format === "obj" ? model.modelUrl || "" : "",
+      stl: format === "stl" ? model.modelUrl || "" : ""
+    },
+    createdAt: model.createdAt,
+    updatedAt: model.updatedAt
+  };
+}
+
+function loadModelFromUrlParams() {
+  const params = new URLSearchParams(window.location.search);
+  const modelUrl = params.get("modelUrl");
+  if (!modelUrl) {
+    if (params.get("localModel")) {
+      setStatus("请重新选择本地模型文件进行预览");
+    }
+    return;
+  }
+
+  const task = {
+    id: params.get("taskId") || modelUrl,
+    prompt: params.get("name") || stripExtension(getFileNameFromUrl(modelUrl)) || "AI生成模型",
+    providerName: params.get("source") || "AI生成",
+    provider: params.get("provider") || "",
+    preferredModelUrl: modelUrl
+  };
+  void loadRemoteModel(modelUrl, {
+    name: task.prompt,
+    formatHint: params.get("format") || inferFormatFromUrl(modelUrl),
+    timeoutMs: MODEL_PLAYBACK_TIMEOUT_MS,
+    taskId: task.id
+  });
 }
 
 function saveGeneratedTasks() {
@@ -1434,7 +1787,9 @@ async function pollGeneratedTask(taskId, provider, force = false) {
 
   const run = async () => {
     try {
-      const task = await fetchJson(`/api/task/${taskId}?provider=${encodeURIComponent(provider)}`);
+      const task = await fetchJson(`/api/task/${taskId}?provider=${encodeURIComponent(provider)}`, {
+        headers: getAuthHeaders()
+      });
       return await handleGeneratedTaskUpdate(taskId, provider, task);
     } catch (error) {
       const current = generatedTasks.find((item) => item.id === taskId);
@@ -1529,6 +1884,8 @@ async function handleGeneratedTaskUpdate(requestTaskId, provider, task) {
     finalized: Boolean(task.finalized),
     preferredModelUrl: getPreviewModelUrl(task) || currentTask.preferredModelUrl || "",
     renderedImage: task.renderedImage || currentTask.renderedImage || "",
+    persistedModel: task.persistedModel || currentTask.persistedModel || null,
+    persistError: task.persistError || currentTask.persistError || null,
     modelUrls: task.modelUrls || currentTask.modelUrls || null,
     output: task.output || currentTask.output || null,
     updatedAt: new Date().toISOString()
@@ -1617,13 +1974,15 @@ async function playGeneratedTask(taskId) {
 
     if (!loaded) {
       setStatus("模型加载失败，请稍后重试");
+    } else {
+      void updateGeneratedModelCoverFromPreview(task.id);
     }
   } finally {
     endPlaybackLoading();
   }
 }
 
-function downloadGeneratedTask(taskId) {
+async function downloadGeneratedTask(taskId) {
   const task = generatedTasks.find((item) => item.id === taskId);
   if (!task) {
     setStatus("没有找到要下载的模型");
@@ -1638,11 +1997,37 @@ function downloadGeneratedTask(taskId) {
 
   const extension = getExtension(playable.format || inferFormatFromUrl(playable.url) || "glb") || "glb";
   const safeName = sanitizeDownloadName(task.prompt || task.taskId || "generated-model");
+  const source = await resolveGeneratedTaskDownloadSource(task, extension);
   const link = document.createElement("a");
-  link.href = buildAssetProxyUrl(playable.url);
-  link.download = `${safeName}.${extension}`;
+  link.href = source.url;
+  link.download = source.fileName || `${safeName}.${extension}`;
   link.click();
   setStatus("模型下载已开始");
+}
+
+async function resolveGeneratedTaskDownloadSource(task, extension) {
+  const model = task?.persistedModel;
+  if (model?.id && authSession?.token) {
+    try {
+      const data = await fetchJson(`/api/work/models/${encodeURIComponent(model.id)}/download-source?format=${encodeURIComponent(extension || model.format || "")}`, {
+        headers: getAuthHeaders()
+      });
+      if (data?.url) {
+        return data.source === "remote"
+          ? data
+          : { ...data, url: buildAssetProxyUrl(data.url) };
+      }
+    } catch (error) {
+      console.warn("Generated task download source resolve failed", error);
+    }
+  }
+
+  const playable = resolvePlayableModel(task);
+  return {
+    source: "fallback",
+    url: buildAssetProxyUrl(playable?.url || ""),
+    fileName: `${sanitizeDownloadName(task.prompt || task.taskId || "generated-model")}.${extension || "glb"}`
+  };
 }
 
 function deleteGeneratedTask(taskId) {
@@ -1742,6 +2127,11 @@ async function handleLoadModel() {
     applyWireframeState();
     captureStereoReferenceCamera();
     setStatus("预览已加载");
+    saveLocalModelEntry({
+      name: entryFile.name,
+      format: getExtension(entryFile.name).toUpperCase(),
+      fileSizeBytes: entryFile.size || 0
+    });
     endLocalSelectionLoading();
     syncOptimizerFormState();
   } catch (error) {
@@ -1909,6 +2299,7 @@ async function loadGltf(entryFile, manager, requestId) {
 async function loadRemoteGltf(modelUrl, requestId, onProgress) {
   const manager = createRemoteLoadingManager(onProgress);
   const loader = new GLTFLoader(manager);
+  applyAuthenticatedModelHeaders(loader, modelUrl);
   const dracoLoader = new DRACOLoader(manager);
   dracoLoader.setDecoderPath("/vendor/three/examples/jsm/libs/draco/gltf/");
   loader.setDRACOLoader(dracoLoader);
@@ -1960,6 +2351,7 @@ async function loadFbx(entryFile, manager, requestId) {
 
 async function loadRemoteFbx(modelUrl, requestId, onProgress) {
   const loader = new FBXLoader(createRemoteLoadingManager(onProgress));
+  applyAuthenticatedModelHeaders(loader, modelUrl);
   const fbx = await loadWithProgress(loader, modelUrl, onProgress);
 
   if (!isModelLoadRequestCurrent(requestId)) {
@@ -2017,6 +2409,7 @@ async function loadObj(entryFile, manager, requestId) {
 
 async function loadRemoteObj(modelUrl, requestId, onProgress) {
   const loader = new OBJLoader(createRemoteLoadingManager(onProgress));
+  applyAuthenticatedModelHeaders(loader, modelUrl);
   const obj = await loadWithProgress(loader, modelUrl, onProgress);
 
   if (!isModelLoadRequestCurrent(requestId)) {
@@ -2068,7 +2461,9 @@ async function loadStl(entryFile, requestId) {
 
 async function loadRemoteStl(modelUrl, requestId, onProgress) {
   const loader = new STLLoader();
-  const response = await fetch(modelUrl);
+  const response = await fetch(modelUrl, {
+    headers: getAuthenticatedModelHeaders(modelUrl)
+  });
   if (!response.ok) {
     throw new Error(`无法读取远程 STL 模型 (${response.status})`);
   }
@@ -2262,6 +2657,17 @@ function clearCurrentObject() {
   syncOptimizerFormState();
 }
 
+function applyAuthenticatedModelHeaders(loader, modelUrl) {
+  const headers = getAuthenticatedModelHeaders(modelUrl);
+  if (Object.keys(headers).length && typeof loader.setRequestHeader === "function") {
+    loader.setRequestHeader(headers);
+  }
+}
+
+function getAuthenticatedModelHeaders(modelUrl) {
+  return String(modelUrl || "").startsWith("/api/work/models/") ? getAuthHeaders() : {};
+}
+
 function beginModelLoadRequest() {
   modelLoadRequestId += 1;
   clearCurrentObject();
@@ -2445,7 +2851,11 @@ function createRemoteProgressReporter(taskId) {
 
 async function readRemoteAssetMetadata(url) {
   try {
-    const response = await fetch(buildAssetProxyUrl(url), { method: "HEAD" });
+    const assetUrl = buildAssetProxyUrl(url);
+    const response = await fetch(assetUrl, {
+      method: "HEAD",
+      headers: getAuthenticatedModelHeaders(assetUrl)
+    });
     if (!response.ok) {
       return {
         sizeBytes: 0,
@@ -4357,6 +4767,74 @@ function exportPng() {
   setStatus("PNG 已导出");
 }
 
+async function updateGeneratedModelCoverFromPreview(taskId) {
+  const task = generatedTasks.find((item) => item.id === taskId);
+  const model = task?.persistedModel;
+  if (!task || !model?.id || !currentObject || !authSession?.token) {
+    return;
+  }
+
+  try {
+    const blob = await captureModelCoverBlob();
+    if (!blob) return;
+
+    const form = new FormData();
+    form.append("name", model.name || task.prompt || task.taskId || "AI生成模型");
+    form.append("cover", blob, `${sanitizeDownloadName(model.name || task.prompt || task.taskId || "ai-model")}-cover.png`);
+
+    const data = await fetchJson(`/api/work/models/${encodeURIComponent(model.id)}`, {
+      method: "PATCH",
+      headers: getAuthHeaders(),
+      body: form
+    });
+    const updatedModel = data.model || null;
+    if (!updatedModel?.coverUrl) return;
+
+    upsertGeneratedTask({
+      ...task,
+      renderedImage: updatedModel.coverUrl,
+      persistedModel: updatedModel,
+      updatedAt: new Date().toISOString()
+    });
+    renderGeneratedTaskList();
+  } catch (error) {
+    console.warn("Generated cover update failed", error);
+  }
+}
+
+function captureModelCoverBlob() {
+  return new Promise((resolve) => {
+    if (!currentObject) {
+      resolve(null);
+      return;
+    }
+
+    const previousBackground = scene.background;
+    const thumbnailCamera = camera.clone();
+    frameThumbnailCamera(thumbnailCamera, currentObject);
+    scene.background = new THREE.Color(0xf4f8fb);
+    renderer.render(scene, thumbnailCamera);
+    renderer.domElement.toBlob((blob) => {
+      scene.background = previousBackground;
+      renderer.render(scene, isStereoDisplayActive ? stereoCamera : camera);
+      resolve(blob);
+    }, "image/png");
+  });
+}
+
+function frameThumbnailCamera(targetCamera, object) {
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const distance = maxDim * 2.35;
+  targetCamera.position.set(center.x + distance * 0.95, center.y + distance * 0.38, center.z + distance * 0.95);
+  targetCamera.near = Math.max(0.1, distance / 100);
+  targetCamera.far = Math.max(100, distance * 10);
+  targetCamera.lookAt(center.x, Math.max(center.y * 0.9, size.y * 0.32), center.z);
+  targetCamera.updateProjectionMatrix();
+}
+
 function applyTheme(theme) {
   const settings = THEME_SETTINGS[theme] || THEME_SETTINGS.warm;
   activeThemeKey = THEME_SETTINGS[theme] ? theme : "warm";
@@ -4405,6 +4883,22 @@ function saveRecentEntry(entry) {
   const next = [entry, ...current.filter((item) => item.name !== entry.name)].slice(0, 6);
   localStorage.setItem(RECENT_STORAGE_KEY, JSON.stringify(next));
   renderRecentEntries(next);
+}
+
+function saveLocalModelEntry(entry) {
+  const current = parseStoredJson(LOCAL_MODEL_STORAGE_KEY, []);
+  const next = [
+    {
+      id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      source: "local",
+      name: entry.name,
+      format: entry.format,
+      fileSizeBytes: entry.fileSizeBytes || 0,
+      createdAt: new Date().toISOString()
+    },
+    ...current.filter((item) => item.name !== entry.name)
+  ].slice(0, PREVIEW_TASK_STORAGE_LIMIT);
+  localStorage.setItem(LOCAL_MODEL_STORAGE_KEY, JSON.stringify(next));
 }
 
 function loadRecentEntries() {
@@ -4478,7 +4972,7 @@ async function fetchJson(url, options) {
   const data = text ? JSON.parse(text) : {};
 
   if (!response.ok) {
-    throw createDetailedError(normalizeRequestErrorMessage(data.message || "请求失败", data), data);
+    throw createDetailedError(normalizeRequestErrorMessage(data.message || "请求失败", data, url), data);
   }
 
   return data;
@@ -4490,9 +4984,10 @@ function createDetailedError(message, details) {
   return error;
 }
 
-function normalizeRequestErrorMessage(message, details) {
+function normalizeRequestErrorMessage(message, details, url = "") {
   const text = String(message || "").trim();
   const detailText = JSON.stringify(details || {});
+  const requestPath = String(url || "");
   const isBusyError = text.includes("The server is busy. Please try again later.")
     || detailText.includes("The server is busy. Please try again later.");
   const isMissingRouteError = text.includes("API route not found")
@@ -4503,6 +4998,10 @@ function normalizeRequestErrorMessage(message, details) {
   }
 
   if (isMissingRouteError) {
+    if (requestPath.includes("/api/auth/")) {
+      return "当前运行中的服务还没有加载最新的登录接口。请重启本地 Node 服务后再试。";
+    }
+
     return "当前运行中的服务还没有加载最新的 AI模型优化接口。请重启本地 Node 服务后再试。";
   }
 

@@ -3,19 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>KMAX AI模型播放器管理后台</title>
+    <title>KMAX 平台管理后台</title>
     <link rel="stylesheet" href="/model-setting.css" />
   </head>
   <body>
     <div class="admin-shell">
       <header class="admin-topbar">
         <a class="brand" href="/">
-          <span>KMAX AI模型播放器管理后台</span>
+          <span>KMAX 平台管理后台</span>
         </a>
         <div class="topbar-user">
-          <span class="user-avatar">A</span>
-          <span class="user-name">admin</span>
-          <span class="user-caret">⌄</span>
+          <button id="admin-user-menu-trigger" class="user-menu-trigger" type="button" aria-label="用户信息">
+            <span class="user-avatar">A</span>
+          </button>
+          <div id="admin-user-menu-panel" class="user-menu-panel hidden">
+            <div class="user-menu-info">
+              <strong class="user-name">admin</strong>
+              <span id="admin-user-role">管理员</span>
+            </div>
+            <a class="user-menu-item" href="/model-preview.html" target="_blank" rel="noopener">模型预览</a>
+            <a class="user-menu-item" href="/model-work.html" target="_blank" rel="noopener">用户中心</a>
+            <button class="user-menu-item" id="admin-logout" type="button">退出登录</button>
+          </div>
         </div>
       </header>
 
@@ -37,7 +46,7 @@
                 <path d="M12 12 19.1 8M12 12 4.9 8M12 12v8" />
               </svg>
             </span>
-            <span>资源管理</span>
+            <span>模型管理</span>
           </button>
           <button class="nav-item" type="button" data-view="clients">
             <span class="nav-icon" aria-hidden="true">
@@ -57,6 +66,15 @@
               </svg>
             </span>
             <span>用户管理</span>
+          </button>
+          <button class="nav-item" type="button" data-view="credits">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 3.5v17" />
+                <path d="M7 7.5h7a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h8" />
+              </svg>
+            </span>
+            <span>积分管理</span>
           </button>
         </aside>
 
@@ -78,6 +96,7 @@
               </label>
               <button id="refresh-view" class="icon-btn hidden" type="button" title="刷新" aria-label="刷新">↻</button>
               <button id="create-user" class="primary-btn compact-btn hidden" type="button">新增用户</button>
+              <button id="create-credit" class="primary-btn compact-btn hidden" type="button">新增积分记录</button>
             </div>
           </section>
 
@@ -172,6 +191,7 @@
                     <tr>
                       <th>用户</th>
                       <th>角色</th>
+                      <th>3D模型空间</th>
                       <th>状态</th>
                       <th>更新时间</th>
                       <th>操作</th>
@@ -181,6 +201,29 @@
                 </table>
               </div>
               <p id="user-empty" class="empty-state hidden">暂无后台用户。</p>
+            </div>
+          </section>
+          <section id="credits-view" class="admin-view hidden">
+            <div class="table-panel">
+              <div class="table-summary">
+                <strong id="credit-total">0</strong>
+                <span>条积分记录</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>用户</th>
+                      <th>变动</th>
+                      <th>余额</th>
+                      <th>说明</th>
+                      <th>时间</th>
+                    </tr>
+                  </thead>
+                  <tbody id="credit-table-body"></tbody>
+                </table>
+              </div>
+              <p id="credit-empty" class="empty-state hidden">暂无积分记录。</p>
             </div>
           </section>
         </main>
@@ -209,6 +252,10 @@
             </select>
           </label>
           <label class="form-field">
+            <span>3D模型空间（GB）</span>
+            <input id="user-model-storage-quota" name="modelStorageQuotaGb" type="number" min="1" max="1024" step="0.1" placeholder="默认 10" />
+          </label>
+          <label class="form-field">
             <span>密码</span>
             <input id="user-password" name="password" type="password" autocomplete="new-password" placeholder="新增必填，修改时留空则不变" />
           </label>
@@ -220,6 +267,42 @@
           <div class="dialog-actions">
             <button id="cancel-user" class="secondary-btn" type="button">取消</button>
             <button id="save-user" class="primary-btn" type="submit">保存</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="credit-dialog" class="dialog-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="credit-dialog-title">
+        <form id="credit-form" class="dialog-panel">
+          <div class="dialog-head">
+            <h2 id="credit-dialog-title">新增积分记录</h2>
+            <button id="close-credit-dialog" class="icon-btn" type="button" aria-label="关闭">×</button>
+          </div>
+          <label class="form-field">
+            <span>用户</span>
+            <div id="credit-selected-user" class="selected-user-card hidden"></div>
+            <input id="credit-user-search" class="credit-user-search" type="search" autocomplete="off" placeholder="搜索用户名或姓名" />
+            <div id="credit-user-options" class="credit-user-options" role="listbox"></div>
+            <select id="credit-user" class="hidden" required></select>
+          </label>
+          <label class="form-field">
+            <span>积分类型</span>
+            <select id="credit-type" required>
+              <option value="marketing_gift">营销赠送</option>
+              <option value="manual_deduct">人工扣除</option>
+            </select>
+          </label>
+          <label class="form-field">
+            <span>积分变动</span>
+            <input id="credit-amount" type="number" step="1" required placeholder="正数充值，负数扣除" />
+          </label>
+          <label class="form-field">
+            <span>说明</span>
+            <input id="credit-note" autocomplete="off" placeholder="例如：活动充值 / 人工扣除" />
+          </label>
+          <div id="credit-feedback" class="feedback hidden" aria-live="polite"></div>
+          <div class="dialog-actions">
+            <button id="cancel-credit" class="secondary-btn" type="button">取消</button>
+            <button id="save-credit" class="primary-btn" type="submit">保存</button>
           </div>
         </form>
       </div>

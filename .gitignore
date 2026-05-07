@@ -1,3 +1,8 @@
 .env.local
 node_modules/
-
+storage/user-models/
+user-models.json
+admin-users.json
+auth-sessions.json
+user-credits.json
+.codex-server.*.log

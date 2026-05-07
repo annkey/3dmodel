@@ -46,7 +46,7 @@ a {
 
 .admin-shell {
   display: grid;
-  grid-template-rows: 64px minmax(0, 1fr);
+  grid-template-rows: 58px minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
 }
@@ -56,8 +56,8 @@ a {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 64px;
-  padding: 0 22px 0 28px;
+  height: 58px;
+  padding: 0 20px 0 24px;
   background: #fff;
   border-bottom: 1px solid var(--line);
 }
@@ -66,38 +66,100 @@ a {
   display: inline-flex;
   align-items: center;
   color: var(--accent);
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 800;
 }
 
 .topbar-user {
+  position: relative;
+}
+
+.user-menu-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 0 14px 0 6px;
-  border-radius: 22px;
-  background: #f1f4f8;
-  font-weight: 700;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(47, 112, 237, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1);
+  cursor: pointer;
+}
+
+.user-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 176px;
+  padding: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
+}
+
+.user-menu-info {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.user-menu-info strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu-info span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.user-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  text-decoration: none;
+}
+
+.user-menu-item:hover {
+  background: rgba(47, 112, 237, 0.08);
+  color: var(--accent-dark);
 }
 
 .user-avatar {
-  display: inline-grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #d8e5ff, #8fb3ff);
-  color: #214d9b;
-}
-
-.user-caret {
-  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #38bdf8, #2563eb);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .admin-layout {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 238px minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
 }
@@ -105,7 +167,7 @@ a {
 .admin-sidebar {
   min-height: 0;
   overflow-y: auto;
-  padding: 22px 14px 18px;
+  padding: 18px 12px 16px;
   background: #fff;
   border-right: 1px solid var(--line);
 }
@@ -113,11 +175,11 @@ a {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  min-height: 52px;
+  min-height: 46px;
   margin: 0 0 8px;
-  padding: 0 18px;
+  padding: 0 16px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -160,44 +222,44 @@ a {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 24px 28px 34px;
+  padding: 20px 24px 30px;
 }
 
 .workspace-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  min-height: 92px;
-  margin-bottom: 18px;
-  padding: 18px 24px;
+  gap: 16px;
+  min-height: 82px;
+  margin-bottom: 14px;
+  padding: 16px 20px;
   border-radius: 8px;
   background: var(--panel);
   box-shadow: var(--shadow);
 }
 
 .workspace-head h1 {
-  margin: 0 0 6px;
-  font-size: 24px;
+  margin: 0 0 4px;
+  font-size: 22px;
   line-height: 1.2;
 }
 
 .workspace-head p {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .head-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
 .control-select,
 .search-box {
-  height: 42px;
+  height: 38px;
   border: 1px solid var(--line-strong);
   border-radius: 4px;
   background: #fff;
@@ -205,7 +267,7 @@ a {
 
 .control-select {
   min-width: 160px;
-  padding: 0 32px 0 14px;
+  padding: 0 30px 0 12px;
   color: var(--muted);
 }
 
@@ -213,8 +275,8 @@ a {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  width: 320px;
-  padding: 0 14px;
+  width: 290px;
+  padding: 0 12px;
   color: #9aa4b2;
 }
 
@@ -228,14 +290,14 @@ a {
 .icon-btn {
   display: inline-grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   border: 1px solid var(--line-strong);
   border-radius: 4px;
   background: #fff;
   color: var(--accent);
   cursor: pointer;
-  font-size: 20px;
+  font-size: 18px;
 }
 
 .content-panel,
@@ -247,11 +309,11 @@ a {
 
 .settings-panel {
   width: min(680px, 100%);
-  padding: 26px;
+  padding: 22px;
 }
 
 .section-title {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .section-title span {
@@ -264,48 +326,107 @@ a {
 }
 
 .section-title h2 {
-  margin: 0 0 6px;
-  font-size: 21px;
+  margin: 0 0 4px;
+  font-size: 19px;
 }
 
 .section-title p {
   margin: 0;
   color: var(--muted);
+  font-size: 13px;
 }
 
 .settings-form {
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .form-field {
   display: grid;
-  gap: 7px;
+  gap: 6px;
 }
 
 .form-field span {
+  font-size: 13px;
   font-weight: 700;
 }
 
 .form-field input,
 .form-field select {
   width: 100%;
-  min-height: 42px;
-  padding: 0 14px;
+  min-height: 38px;
+  padding: 0 12px;
   border: 1px solid var(--line-strong);
   border-radius: 4px;
   background: #fff;
   color: var(--text);
 }
 
+.selected-user-card {
+  display: grid;
+  gap: 4px;
+  padding: 9px 11px;
+  border: 1px solid rgba(47, 112, 237, 0.18);
+  border-radius: 6px;
+  background: rgba(47, 112, 237, 0.06);
+}
+
+.selected-user-card span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.credit-user-options {
+  display: grid;
+  gap: 6px;
+  max-height: 174px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.credit-user-option {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.credit-user-option:hover,
+.credit-user-option.active {
+  border-color: rgba(47, 112, 237, 0.25);
+  background: rgba(47, 112, 237, 0.08);
+}
+
+.credit-user-option small,
+.credit-user-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.credit-user-empty {
+  padding: 10px;
+}
+
 .runtime-note,
 .feedback {
-  padding: 14px 16px;
+  padding: 11px 13px;
   border: 1px solid #dbe7ff;
   border-radius: 4px;
   background: #f4f8ff;
   color: #43536b;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .form-actions {
@@ -320,15 +441,15 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
-  padding: 0 16px;
+  min-height: 36px;
+  padding: 0 14px;
   border-radius: 4px;
   cursor: pointer;
   font-weight: 700;
 }
 
 .compact-btn {
-  min-height: 42px;
+  min-height: 38px;
   white-space: nowrap;
 }
 
@@ -356,14 +477,14 @@ a {
 
 .text-btn,
 .danger-btn {
-  min-height: 30px;
-  padding: 0 9px;
+  min-height: 28px;
+  padding: 0 8px;
   border: 1px solid var(--line-strong);
   border-radius: 4px;
   background: #fff;
   cursor: pointer;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .text-btn {
@@ -376,7 +497,7 @@ a {
 }
 
 .feedback {
-  margin-top: 18px;
+  margin-top: 14px;
 }
 
 .feedback.success {
@@ -399,13 +520,13 @@ a {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 16px 22px;
+  padding: 13px 18px;
   border-bottom: 1px solid var(--line);
 }
 
 .table-summary strong {
   color: var(--accent);
-  font-size: 24px;
+  font-size: 22px;
 }
 
 .table-summary span {
@@ -424,7 +545,7 @@ table {
 
 th,
 td {
-  padding: 13px 18px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
@@ -433,12 +554,13 @@ td {
 th {
   background: var(--soft);
   color: #4b586b;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
 }
 
 td {
   color: #2f3848;
+  font-size: 13px;
 }
 
 .cell-main {
@@ -447,7 +569,7 @@ td {
 }
 
 .cell-main strong {
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .cell-main small,
@@ -458,8 +580,8 @@ td {
 .status-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 0 9px;
+  min-height: 22px;
+  padding: 0 8px;
   border-radius: 4px;
   background: #edf2ff;
   color: var(--accent);
@@ -497,20 +619,21 @@ td {
 .download-link {
   display: inline-flex;
   align-items: center;
-  min-height: 30px;
-  padding: 0 9px;
+  min-height: 28px;
+  padding: 0 8px;
   border: 1px solid #cfe0ff;
   border-radius: 4px;
   color: var(--accent);
   background: #f7faff;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .empty-state {
   margin: 0;
-  padding: 26px;
+  padding: 22px;
   color: var(--muted);
+  font-size: 13px;
 }
 
 .dialog-backdrop {
@@ -519,15 +642,15 @@ td {
   z-index: 30;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 18px;
   background: rgba(20, 30, 46, 0.28);
 }
 
 .dialog-panel {
-  width: min(460px, 100%);
-  max-height: calc(100vh - 48px);
+  width: min(430px, 100%);
+  max-height: calc(100vh - 36px);
   overflow-y: auto;
-  padding: 22px;
+  padding: 18px;
   border-radius: 8px;
   background: #fff;
   box-shadow: 0 24px 60px rgba(18, 32, 56, 0.22);
@@ -537,24 +660,24 @@ td {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 14px;
+  margin-bottom: 13px;
 }
 
 .dialog-head h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 18px;
 }
 
 .dialog-panel .form-field {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .check-field {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin: 2px 0 14px;
+  margin: 2px 0 12px;
   color: var(--text);
   font-weight: 700;
 }
@@ -567,8 +690,8 @@ td {
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  margin-top: 16px;
+  gap: 8px;
+  margin-top: 13px;
 }
 
 .hidden {

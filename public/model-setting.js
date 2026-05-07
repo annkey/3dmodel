@@ -9,7 +9,8 @@ const views = {
   settings: document.getElementById("settings-view"),
   assets: document.getElementById("assets-view"),
   clients: document.getElementById("clients-view"),
-  users: document.getElementById("users-view")
+  users: document.getElementById("users-view"),
+  credits: document.getElementById("credits-view")
 };
 const viewTitle = document.getElementById("view-title");
 const viewDescription = document.getElementById("view-description");
@@ -18,6 +19,7 @@ const searchWrap = document.getElementById("admin-search-wrap");
 const searchInput = document.getElementById("admin-search");
 const refreshButton = document.getElementById("refresh-view");
 const createUserButton = document.getElementById("create-user");
+const createCreditButton = document.getElementById("create-credit");
 const assetTotal = document.getElementById("asset-total");
 const assetTableBody = document.getElementById("asset-table-body");
 const assetEmpty = document.getElementById("asset-empty");
@@ -27,6 +29,9 @@ const clientEmpty = document.getElementById("client-empty");
 const userTotal = document.getElementById("user-total");
 const userTableBody = document.getElementById("user-table-body");
 const userEmpty = document.getElementById("user-empty");
+const creditTotal = document.getElementById("credit-total");
+const creditTableBody = document.getElementById("credit-table-body");
+const creditEmpty = document.getElementById("credit-empty");
 const userDialog = document.getElementById("user-dialog");
 const userForm = document.getElementById("user-form");
 const userDialogTitle = document.getElementById("user-dialog-title");
@@ -34,12 +39,34 @@ const userIdInput = document.getElementById("user-id");
 const userUsernameInput = document.getElementById("user-username");
 const userDisplayNameInput = document.getElementById("user-display-name");
 const userRoleSelect = document.getElementById("user-role");
+const userModelStorageQuotaInput = document.getElementById("user-model-storage-quota");
 const userPasswordInput = document.getElementById("user-password");
 const userDisabledInput = document.getElementById("user-disabled");
 const userFeedback = document.getElementById("user-feedback");
 const saveUserButton = document.getElementById("save-user");
 const closeUserDialogButton = document.getElementById("close-user-dialog");
 const cancelUserButton = document.getElementById("cancel-user");
+const creditDialog = document.getElementById("credit-dialog");
+const creditForm = document.getElementById("credit-form");
+const creditUserSelect = document.getElementById("credit-user");
+const creditSelectedUser = document.getElementById("credit-selected-user");
+const creditUserSearch = document.getElementById("credit-user-search");
+const creditUserOptions = document.getElementById("credit-user-options");
+const creditTypeSelect = document.getElementById("credit-type");
+const creditAmountInput = document.getElementById("credit-amount");
+const creditNoteInput = document.getElementById("credit-note");
+const creditFeedback = document.getElementById("credit-feedback");
+const saveCreditButton = document.getElementById("save-credit");
+const closeCreditDialogButton = document.getElementById("close-credit-dialog");
+const cancelCreditButton = document.getElementById("cancel-credit");
+const adminUserMenu = document.querySelector(".topbar-user");
+const adminUserMenuTrigger = document.getElementById("admin-user-menu-trigger");
+const adminUserMenuPanel = document.getElementById("admin-user-menu-panel");
+const adminUserAvatar = document.querySelector(".topbar-user .user-avatar");
+const adminUserName = document.querySelector(".topbar-user .user-name");
+const adminUserRole = document.getElementById("admin-user-role");
+const adminLogoutButton = document.getElementById("admin-logout");
+const AUTH_STORAGE_KEY = "kmax-model-preview-auth";
 
 const viewMeta = {
   settings: {
@@ -47,7 +74,7 @@ const viewMeta = {
     description: "统一管理 3D 模型生成平台和公共模型版本。"
   },
   assets: {
-    title: "资源管理",
+    title: "模型管理",
     description: "查看模型生成任务列表，并下载已生成的模型资源。"
   },
   clients: {
@@ -60,16 +87,26 @@ const viewMeta = {
   }
 };
 
+viewMeta.credits = {
+  title: "积分管理",
+  description: "查看用户积分记录，并给指定用户手动新增或扣除积分。"
+};
+
 let apiConfig = null;
 let currentView = "settings";
 let assetRows = [];
 let clientRows = [];
 let userRows = [];
+let creditRows = [];
+let creditUsers = [];
+let currentAdminUser = null;
+let creditDialogFixedUserId = "";
 
 bootstrap();
 
 async function bootstrap() {
   bindEvents();
+  await ensureAdminSession();
 
   try {
     await refreshConfig();
@@ -110,6 +147,8 @@ function bindEvents() {
       renderClients();
     } else if (currentView === "users") {
       renderUsers();
+    } else if (currentView === "credits") {
+      renderCredits();
     }
   });
 
@@ -119,6 +158,26 @@ function bindEvents() {
 
   createUserButton.addEventListener("click", () => {
     openUserDialog();
+  });
+
+  createCreditButton.addEventListener("click", () => {
+    void openCreditDialogV2();
+  });
+
+  adminUserMenuTrigger?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    adminUserMenuPanel?.classList.toggle("hidden");
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!adminUserMenu?.contains(event.target)) {
+      adminUserMenuPanel?.classList.add("hidden");
+    }
+  });
+
+  adminLogoutButton?.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await logoutAdmin();
   });
 
   userTableBody.addEventListener("click", (event) => {
@@ -145,6 +204,26 @@ function bindEvents() {
       closeUserDialog();
     }
   });
+
+  creditForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveCreditRecord();
+  });
+  creditUserSearch?.addEventListener("input", handleCreditUserSearchInput);
+  creditUserOptions?.addEventListener("click", (event) => {
+    const option = event.target.closest("[data-credit-user-id]");
+    if (option) {
+      selectCreditUser(option.dataset.creditUserId);
+    }
+  });
+  creditTypeSelect?.addEventListener("change", syncCreditAmountHint);
+  closeCreditDialogButton.addEventListener("click", closeCreditDialog);
+  cancelCreditButton.addEventListener("click", closeCreditDialog);
+  creditDialog.addEventListener("click", (event) => {
+    if (event.target === creditDialog) {
+      closeCreditDialog();
+    }
+  });
 }
 
 async function switchView(viewName) {
@@ -165,6 +244,7 @@ async function switchView(viewName) {
   searchWrap.classList.toggle("hidden", !listView);
   refreshButton.classList.toggle("hidden", !listView);
   createUserButton.classList.toggle("hidden", currentView !== "users");
+  createCreditButton.classList.toggle("hidden", currentView !== "credits");
   searchInput.value = "";
 
   await refreshCurrentView();
@@ -177,6 +257,8 @@ async function refreshCurrentView() {
     await refreshClients();
   } else if (currentView === "users") {
     await refreshUsers();
+  } else if (currentView === "credits") {
+    await refreshCredits();
   }
 }
 
@@ -185,6 +267,33 @@ async function refreshConfig() {
   renderProviderOptions();
   syncModelVersionOptions();
   updateRuntimeNote();
+}
+
+async function ensureAdminSession() {
+  const session = parseStoredJson(AUTH_STORAGE_KEY, null);
+  if (!session?.token) {
+    window.location.href = "/model-preview.html";
+    throw new Error("Login required");
+  }
+
+  try {
+    const data = await fetchJson("/api/auth/session");
+    if (data.user?.role !== "admin") {
+      window.location.href = "/model-preview.html";
+      throw new Error("Admin required");
+    }
+    currentAdminUser = data.user;
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({
+      token: data.token || session.token,
+      expiresAt: data.expiresAt || session.expiresAt,
+      user: data.user
+    }));
+    renderAdminUser();
+  } catch (error) {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    window.location.href = "/model-preview.html";
+    throw error;
+  }
 }
 
 async function refreshAssets() {
@@ -216,7 +325,7 @@ async function refreshClients() {
 }
 
 async function refreshUsers() {
-  userTableBody.innerHTML = renderLoadingRow(5, "正在读取用户列表...");
+  userTableBody.innerHTML = renderLoadingRow(6, "正在读取用户列表...");
   userEmpty.classList.add("hidden");
 
   try {
@@ -225,7 +334,38 @@ async function refreshUsers() {
     renderUsers();
   } catch (error) {
     userRows = [];
-    userTableBody.innerHTML = renderMessageRow(5, error.message || "用户列表读取失败");
+    userTableBody.innerHTML = renderMessageRow(6, error.message || "用户列表读取失败");
+  }
+}
+
+async function refreshCredits() {
+  creditTableBody.innerHTML = renderLoadingRow(5, "正在读取积分记录...");
+  creditEmpty.classList.add("hidden");
+
+  try {
+    const data = await fetchJson("/api/admin/credits");
+    creditRows = data.records || [];
+    creditUsers = data.users || [];
+    if (!creditUsers.length) {
+      await refreshCreditUsersFallback();
+    }
+    renderCredits();
+  } catch (error) {
+    creditRows = [];
+    await refreshCreditUsersFallback();
+    creditTableBody.innerHTML = renderMessageRow(5, error.message || "积分记录读取失败");
+  }
+}
+
+async function refreshCreditUsersFallback() {
+  try {
+    const data = await fetchJson("/api/admin/users");
+    creditUsers = (data.users || []).map((user) => ({
+      ...user,
+      credits: Number(user.credits || 0)
+    }));
+  } catch {
+    creditUsers = [];
   }
 }
 
@@ -416,6 +556,50 @@ function renderUsers() {
   userTableBody.innerHTML = rows.map(renderUserRow).join("");
 }
 
+function renderCredits() {
+  const keyword = searchInput.value.trim().toLowerCase();
+  const rows = creditRows.filter((record) => {
+    const user = record.user || {};
+    const text = [
+      user.username,
+      user.displayName,
+      record.title,
+      record.note,
+      record.amount,
+      record.balance
+    ].join(" ").toLowerCase();
+    return !keyword || text.includes(keyword);
+  });
+
+  creditTotal.textContent = String(rows.length);
+  creditEmpty.classList.toggle("hidden", rows.length > 0);
+  creditTableBody.innerHTML = rows.map(renderCreditRow).join("");
+}
+
+function renderCreditRow(record) {
+  const user = record.user || {};
+  const amount = Number(record.amount || 0);
+  return `
+    <tr>
+      <td>
+        <div class="cell-main">
+          <strong>${escapeHtml(user.displayName || user.username || record.userId)}</strong>
+          <small>${escapeHtml(user.username || record.userId)}</small>
+        </div>
+      </td>
+      <td><span class="status-pill ${amount >= 0 ? "success" : "failed"}">${amount >= 0 ? "+" : ""}${escapeHtml(amount)}</span></td>
+      <td>${escapeHtml(record.balance)}</td>
+      <td>
+        <div class="cell-main">
+          <strong>${escapeHtml(record.title || "积分记录")}</strong>
+          <small>${escapeHtml(record.note || "-")}</small>
+        </div>
+      </td>
+      <td>${escapeHtml(formatTime(record.createdAt))}</td>
+    </tr>
+  `;
+}
+
 function renderUserRow(user) {
   return `
     <tr>
@@ -427,6 +611,12 @@ function renderUserRow(user) {
         </div>
       </td>
       <td><span class="status-pill">${escapeHtml(user.roleText || formatRole(user.role))}</span></td>
+      <td>
+        <div class="cell-main">
+          <strong>${escapeHtml(formatBytes(user.modelStorage?.usedBytes || 0))} / ${escapeHtml(formatBytes(user.modelStorageQuotaBytes || 0))}</strong>
+          <small>可在用户编辑中调整</small>
+        </div>
+      </td>
       <td><span class="status-pill ${user.disabled ? "failed" : "success"}">${escapeHtml(user.statusText || (user.disabled ? "已禁用" : "已启用"))}</span></td>
       <td>${escapeHtml(formatTime(user.updatedAt))}</td>
       <td>
@@ -446,6 +636,7 @@ function openUserDialog(user = null) {
   userUsernameInput.value = user?.username || "";
   userDisplayNameInput.value = user?.displayName || "";
   userRoleSelect.value = user?.role || "user";
+  userModelStorageQuotaInput.value = user?.modelStorageQuotaGb || 10;
   userPasswordInput.value = "";
   userPasswordInput.required = !user;
   userDisabledInput.checked = Boolean(user?.disabled);
@@ -459,6 +650,157 @@ function closeUserDialog() {
   userForm.reset();
   userIdInput.value = "";
   hideUserFeedback();
+}
+
+function closeCreditDialog() {
+  creditDialog.classList.add("hidden");
+  creditForm.reset();
+  creditDialogFixedUserId = "";
+  hideCreditFeedback();
+}
+
+async function openCreditDialogV2(preselectUserId = "") {
+  await refreshCredits();
+
+  creditForm.reset();
+  creditDialogFixedUserId = preselectUserId || "";
+  renderCreditUserSelectOptions();
+
+  if (!creditUsers.length) {
+    showCreditFeedback("暂无可调整积分的用户，请先在用户管理中创建用户。", "error");
+    creditDialog.classList.remove("hidden");
+    return;
+  }
+
+  creditUserSelect.value = "";
+  renderSelectedCreditUser(null);
+  syncCreditUserPicker();
+  if (preselectUserId) {
+    selectCreditUser(preselectUserId);
+  } else if (creditUserSearch) {
+    creditUserSearch.value = "";
+    hideCreditUserOptions();
+  }
+  syncCreditAmountHint();
+  hideCreditFeedback();
+  creditDialog.classList.remove("hidden");
+  (creditDialogFixedUserId ? creditAmountInput : creditUserSearch)?.focus();
+}
+
+function renderCreditUserSelectOptions() {
+  creditUserSelect.innerHTML = creditUsers.map((user) => {
+    const label = `${user.displayName || user.username}（余额 ${user.credits || 0}）`;
+    return `<option value="${escapeAttribute(user.id)}">${escapeHtml(label)}</option>`;
+  }).join("");
+}
+
+function syncCreditUserPicker() {
+  const selectedUser = getCreditUserById(creditUserSelect.value);
+  renderSelectedCreditUser(null);
+
+  if (creditDialogFixedUserId && selectedUser) {
+    creditUserSearch.classList.add("hidden");
+    hideCreditUserOptions();
+    return;
+  }
+
+  creditUserSearch.classList.remove("hidden");
+  if (creditUserSearch.value.trim()) {
+    renderCreditUserOptions();
+  } else {
+    hideCreditUserOptions();
+  }
+}
+
+function handleCreditUserSearchInput() {
+  const keyword = creditUserSearch.value.trim().toLowerCase();
+  creditUserSelect.value = "";
+  renderSelectedCreditUser(null);
+  if (!keyword) {
+    hideCreditUserOptions();
+    return;
+  }
+  renderCreditUserOptions();
+}
+
+function renderSelectedCreditUser(user) {
+  if (!user) {
+    creditSelectedUser.classList.add("hidden");
+    creditSelectedUser.innerHTML = "";
+    return;
+  }
+
+  creditSelectedUser.classList.remove("hidden");
+  creditSelectedUser.innerHTML = `
+    <strong>${escapeHtml(user.displayName || user.username)}</strong>
+    <span>${escapeHtml(user.username)} · 当前积分 ${escapeHtml(user.credits || 0)}</span>
+  `;
+}
+
+function renderCreditUserOptions() {
+  if (!creditUserOptions) {
+    return;
+  }
+  const keyword = creditUserSearch.value.trim().toLowerCase();
+  if (!keyword) {
+    hideCreditUserOptions();
+    return;
+  }
+  const users = getMatchingCreditUsers(keyword).slice(0, 30);
+  creditUserOptions.classList.remove("hidden");
+
+  creditUserOptions.innerHTML = users.length ? users.map((user) => `
+    <button class="credit-user-option ${user.id === creditUserSelect.value ? "active" : ""}" type="button" data-credit-user-id="${escapeAttribute(user.id)}">
+      <span>${escapeHtml(user.displayName || user.username)}</span>
+      <small>${escapeHtml(user.username)} · 积分 ${escapeHtml(user.credits || 0)}</small>
+    </button>
+  `).join("") : `<div class="credit-user-empty">没有匹配的用户</div>`;
+}
+
+function getMatchingCreditUsers(keyword) {
+  if (!keyword) {
+    return creditUsers;
+  }
+  return creditUsers.filter((user) => {
+    const text = [user.id, user.username, user.displayName, user.roleText].join(" ").toLowerCase();
+    return text.includes(keyword);
+  });
+}
+
+function hideCreditUserOptions() {
+  if (!creditUserOptions) {
+    return;
+  }
+  creditUserOptions.classList.add("hidden");
+  creditUserOptions.innerHTML = "";
+}
+
+function selectCreditUser(userId) {
+  const user = getCreditUserById(userId);
+  if (!user) {
+    return;
+  }
+  creditUserSelect.value = user.id;
+  if (creditUserSearch) {
+    creditUserSearch.value = user.displayName || user.username || "";
+  }
+  renderSelectedCreditUser(null);
+  hideCreditUserOptions();
+}
+
+function getCreditUserById(userId) {
+  return creditUsers.find((user) => user.id === userId) || null;
+}
+
+function syncCreditAmountHint() {
+  if (!creditTypeSelect || !creditAmountInput) {
+    return;
+  }
+  if (creditTypeSelect.value === "manual_deduct") {
+    creditAmountInput.placeholder = "请输入扣除积分，例如 10";
+  } else {
+    creditAmountInput.placeholder = "请输入赠送积分，例如 50";
+  }
 }
 
 async function handleUserAction(action, user) {
@@ -493,6 +835,7 @@ async function saveUser() {
     username: userUsernameInput.value.trim(),
     displayName: userDisplayNameInput.value.trim(),
     role: userRoleSelect.value,
+    modelStorageQuotaGb: Number(userModelStorageQuotaInput.value || 10),
     disabled: userDisabledInput.checked
   };
 
@@ -522,6 +865,37 @@ async function saveUser() {
   }
 }
 
+async function saveCreditRecord() {
+  saveCreditButton.disabled = true;
+  saveCreditButton.textContent = "保存中...";
+  hideCreditFeedback();
+
+  try {
+    const rawAmount = Math.abs(Number(creditAmountInput.value));
+    const amount = creditTypeSelect.value === "manual_deduct" ? -rawAmount : rawAmount;
+    if (!getCreditUserById(creditUserSelect.value)) {
+      throw new Error("请先搜索并选择要调整积分的用户。");
+    }
+    await fetchJson("/api/admin/credits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: creditUserSelect.value,
+        amount,
+        type: creditTypeSelect.value,
+        note: creditNoteInput.value.trim()
+      })
+    });
+    closeCreditDialog();
+    await refreshCredits();
+  } catch (error) {
+    showCreditFeedback(error.message || "积分记录保存失败", "error");
+  } finally {
+    saveCreditButton.disabled = false;
+    saveCreditButton.textContent = "保存";
+  }
+}
+
 async function updateUser(id, payload) {
   try {
     await fetchJson(`/api/admin/users/${encodeURIComponent(id)}`, {
@@ -535,6 +909,29 @@ async function updateUser(id, payload) {
   }
 }
 
+async function logoutAdmin() {
+  try {
+    await fetchJson("/api/auth/logout", { method: "POST" });
+  } catch {
+    // Local logout should still clear the browser session.
+  }
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  window.location.href = "/model-preview.html";
+}
+
+function renderAdminUser() {
+  const displayName = currentAdminUser?.displayName || currentAdminUser?.username || "admin";
+  if (adminUserAvatar) {
+    adminUserAvatar.textContent = getUserInitial(displayName);
+  }
+  if (adminUserName) {
+    adminUserName.textContent = displayName;
+  }
+  if (adminUserRole) {
+    adminUserRole.textContent = currentAdminUser?.roleText || "管理员";
+  }
+}
+
 function normalizeDownloadItems(task) {
   const items = Array.isArray(task.downloadItems) ? [...task.downloadItems] : [];
   if (task.preferredModelUrl && !items.some((item) => item.url === task.preferredModelUrl)) {
@@ -544,15 +941,40 @@ function normalizeDownloadItems(task) {
 }
 
 async function fetchJson(url, options) {
-  const response = await fetch(url, options);
+  const headers = {
+    ...getAuthHeaders(),
+    ...(options?.headers || {})
+  };
+  const response = await fetch(url, {
+    ...(options || {}),
+    headers
+  });
   const text = await response.text();
   const data = text ? JSON.parse(text) : {};
 
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      localStorage.removeItem(AUTH_STORAGE_KEY);
+      window.location.href = "/model-preview.html";
+    }
     throw new Error(data.message || "请求失败");
   }
 
   return data;
+}
+
+function getAuthHeaders() {
+  const session = parseStoredJson(AUTH_STORAGE_KEY, null);
+  return session?.token ? { Authorization: `Bearer ${session.token}` } : {};
+}
+
+function parseStoredJson(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || "");
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function renderLoadingRow(colspan, message) {
@@ -581,6 +1003,16 @@ function showUserFeedback(message, type) {
 function hideUserFeedback() {
   userFeedback.textContent = "";
   userFeedback.className = "feedback hidden";
+}
+
+function showCreditFeedback(message, type) {
+  creditFeedback.textContent = message;
+  creditFeedback.className = `feedback ${type}`;
+}
+
+function hideCreditFeedback() {
+  creditFeedback.textContent = "";
+  creditFeedback.className = "feedback hidden";
 }
 
 function normalizeProvider(value) {
@@ -612,6 +1044,11 @@ function formatRole(role) {
   return role === "admin" ? "管理员" : "普通用户";
 }
 
+function getUserInitial(name) {
+  const value = String(name || "").trim();
+  return value ? value.slice(0, 1).toUpperCase() : "A";
+}
+
 function formatTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -624,6 +1061,19 @@ function formatSize(size) {
   const width = Number(size?.width || 0);
   const height = Number(size?.height || 0);
   return width && height ? `${width} × ${height}` : "-";
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!value) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let next = value;
+  let unitIndex = 0;
+  while (next >= 1024 && unitIndex < units.length - 1) {
+    next /= 1024;
+    unitIndex += 1;
+  }
+  return `${next >= 10 || unitIndex === 0 ? next.toFixed(0) : next.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function getBrowserLabel(userAgent) {

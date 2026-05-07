@@ -108,6 +108,10 @@ export function inferFormatFromUrl(url) {
 }
 
 export function buildAssetProxyUrl(url) {
+  const value = String(url || "");
+  if (value.startsWith("/api/work/models/")) {
+    return value;
+  }
   return `/api/asset?url=${encodeURIComponent(url)}`;
 }
 

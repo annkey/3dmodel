@@ -81,10 +81,71 @@ function renderGeneratedTaskMarkup(task, options) {
         <span>${escapeHtml(getTaskStageLabel(task))}</span>
       </div>
       <div class="model-list-actions">
-        <button class="secondary-btn" type="button" data-refresh-task="${escapeHtml(task.id)}">刷新进度</button>
         <button class="secondary-btn" type="button" data-delete-task="${escapeHtml(task.id)}">删除</button>
         <button class="secondary-btn" type="button" data-download-task="${escapeHtml(task.id)}" ${canDownload ? "" : "disabled"}>下载</button>
         <button class="primary-btn" type="button" data-play-task="${escapeHtml(task.id)}" ${playDisabled ? "disabled" : ""}>${playLabel}</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderGeneratedTaskCardMarkup(task, options) {
+  const {
+    activePlaybackLoadingTaskId,
+    escapeHtml,
+    formatBytes,
+    formatStatus,
+    formatTimeLabel,
+    getDisplayProgress,
+    getTaskStageLabel,
+    resolvePlayableModel
+  } = options;
+
+  const progress = getDisplayProgress(task);
+  const playable = resolvePlayableModel(task);
+  const canPlay = task.status === "success" && Boolean(playable?.url);
+  const canDownload = canPlay;
+  const isPlaybackLoading = activePlaybackLoadingTaskId === task.id;
+  const playDisabled = !canPlay || (Boolean(activePlaybackLoadingTaskId) && !isPlaybackLoading);
+  const playLabel = isPlaybackLoading ? "加载中..." : "播放模型";
+  const title = task.prompt || task.name || task.taskId || "未命名模型";
+  const timeLabel = formatTimeLabel(task.updatedAt || task.createdAt);
+  const fileSizeLabel = Number(task.fileSizeBytes || 0) > 0 ? formatBytes(task.fileSizeBytes) : "-";
+  const formatLabel = (playable?.format || task.format || "").toString().toUpperCase() || "-";
+  const statusLabel = formatStatus(task.statusText || task.status);
+  const coverUrl = task.renderedImage || task.thumbnailUrl || task.imageUrl || task.persistedModel?.coverUrl || "";
+  const coverHtml = coverUrl
+    ? `<img src="${escapeHtml(coverUrl)}" alt="${escapeHtml(title)} 封面" loading="lazy" />`
+    : `<span class="model-list-cube"></span>`;
+
+  return `
+    <article class="model-list-item">
+      <div class="model-list-cover">${coverHtml}</div>
+      <div class="model-list-body">
+        <div class="model-list-top">
+          <div class="model-list-title">
+            <strong>${escapeHtml(title)}</strong>
+            <span>${escapeHtml(task.mode === "image" ? "图片生成" : "文字生成")}</span>
+          </div>
+        </div>
+        <div class="model-list-meta">
+          <span>时间：${escapeHtml(timeLabel)}</span>
+          <span>大小：${escapeHtml(fileSizeLabel)}</span>
+          <span>格式：${escapeHtml(formatLabel)}</span>
+        </div>
+        <div class="model-list-progress" aria-label="生成进度 ${progress}%">
+          <div class="model-list-progress-fill" style="width:${progress}%"></div>
+        </div>
+        <div class="model-list-meta">
+          <span>${progress}%</span>
+          <span>${escapeHtml(getTaskStageLabel(task))}</span>
+          <span class="model-list-status">${escapeHtml(statusLabel)}</span>
+        </div>
+        <div class="model-list-actions">
+          <button class="secondary-btn" type="button" data-delete-task="${escapeHtml(task.id)}">删除</button>
+          <button class="secondary-btn" type="button" data-download-task="${escapeHtml(task.id)}" ${canDownload ? "" : "disabled"}>下载</button>
+          <button class="primary-btn" type="button" data-play-task="${escapeHtml(task.id)}" ${playDisabled ? "disabled" : ""}>${playLabel}</button>
+        </div>
       </div>
     </article>
   `;
@@ -118,7 +179,7 @@ export function renderGeneratedTaskListView({
   }
 
   modelListEmpty.classList.add("hidden");
-  modelListItems.innerHTML = tasks.map((task) => renderGeneratedTaskMarkup(task, {
+  modelListItems.innerHTML = tasks.map((task) => renderGeneratedTaskCardMarkup(task, {
     activePlaybackLoadingTaskId,
     escapeHtml,
     formatBytes,
@@ -147,11 +208,7 @@ export function renderGeneratedTaskListView({
     });
   });
 
-  modelListItems.querySelectorAll("[data-refresh-task]").forEach((button) => {
-    button.addEventListener("click", () => {
-      onRefresh(button.dataset.refreshTask || "");
-    });
-  });
+  void onRefresh;
 }
 
 export function updateTaskProgressOverlayView({

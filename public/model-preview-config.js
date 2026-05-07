@@ -1,4 +1,5 @@
 export const GENERATED_TASK_STORAGE_KEY = "model-preview-generated-tasks";
+export const LOCAL_MODEL_STORAGE_KEY = "model-preview-local-models";
 export const PREVIEW_TASK_STORAGE_LIMIT = 18;
 export const RECENT_STORAGE_KEY = "model-preview-recent";
 

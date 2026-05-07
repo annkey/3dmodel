@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KMAX 用户中心</title>
+    <link rel="stylesheet" href="/model-work.css" />
+  </head>
+  <body>
+    <div class="work-shell">
+      <header class="work-topbar">
+        <a class="brand" href="/model-preview.html" target="_blank" rel="noopener">KMAX 用户中心</a>
+        <div class="topbar-actions">
+          <div id="work-user-menu" class="user-menu">
+            <button id="work-user-menu-trigger" class="user-menu-trigger" type="button" aria-label="用户信息">
+              <span id="work-user-avatar" class="user-avatar">U</span>
+            </button>
+            <div id="work-user-menu-panel" class="user-menu-panel hidden">
+              <div class="user-menu-info">
+                <strong id="work-user-display-name">用户</strong>
+                <span id="work-user-role-text">普通用户</span>
+              </div>
+              <a class="user-menu-item" href="/model-preview.html" target="_blank" rel="noopener">模型预览</a>
+              <a id="work-admin-entry-link" class="user-menu-item hidden" href="/model-setting.html" target="_blank" rel="noopener">管理后台</a>
+              <button id="work-logout-button" class="user-menu-item" type="button">退出登录</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div class="work-layout">
+        <aside class="work-sidebar" aria-label="用户中心菜单">
+          <div class="sidebar-nav">
+            <button class="nav-item active" type="button" data-view="models">我的模型</button>
+            <button class="nav-item" type="button" data-view="credits">我的积分</button>
+            <button class="nav-item" type="button" data-view="profile">我的信息</button>
+          </div>
+          <div class="sidebar-storage">
+            <strong>个人3D模型存储空间</strong>
+            <span id="storage-text">正在读取...</span>
+            <div class="storage-meter" aria-hidden="true">
+              <span id="storage-meter-fill"></span>
+            </div>
+          </div>
+        </aside>
+
+        <main class="work-main">
+          <section class="workspace-head">
+            <div>
+              <h1 id="view-title">我的模型</h1>
+              <p id="view-description">上传本地模型到个人空间，查看AI生成的模型</p>
+            </div>
+            <div id="model-filters" class="head-actions">
+              <select id="source-filter" class="control-select">
+                <option value="all">全部来源</option>
+                <option value="upload">我的模型</option>
+                <option value="ai">AI生成</option>
+              </select>
+              <button id="open-upload-dialog" class="primary-btn" type="button">上传3D模型</button>
+            </div>
+          </section>
+
+          <section id="models-view" class="work-view">
+            <div id="model-feedback" class="feedback hidden" aria-live="polite"></div>
+            <div id="model-list" class="model-list"></div>
+            <p id="model-empty" class="empty-state hidden">暂无模型记录。</p>
+          </section>
+
+          <section id="credits-view" class="work-view hidden">
+            <div class="summary-grid">
+              <article class="summary-card">
+                <span>当前积分</span>
+                <strong id="credit-balance">0</strong>
+              </article>
+              <article class="summary-card">
+                <span>AI生成消耗</span>
+                <strong id="generate-cost">-</strong>
+              </article>
+              <article class="summary-card">
+                <span>AI优化消耗</span>
+                <strong id="optimize-cost">-</strong>
+              </article>
+              <article class="summary-card">
+                <span>自费充值</span>
+                <strong class="summary-text">联系管理员</strong>
+              </article>
+            </div>
+            <div class="content-panel">
+              <div class="section-title">
+                <h2>积分记录</h2>
+                <p>积分充值和扣除由管理员在管理后台新增记录。</p>
+              </div>
+              <div id="credit-records" class="record-list"></div>
+              <p id="credit-empty" class="empty-state hidden">暂无积分记录。</p>
+            </div>
+          </section>
+
+          <section id="profile-view" class="work-view hidden">
+            <div class="profile-grid">
+              <form id="profile-form" class="content-panel settings-form">
+                <div class="section-title">
+                  <h2>账号信息</h2>
+                  <p>修改用户名和展示名称。</p>
+                </div>
+                <label class="form-field">
+                  <span>用户名</span>
+                  <input id="profile-username" autocomplete="username" required />
+                </label>
+                <label class="form-field">
+                  <span>展示名称</span>
+                  <input id="profile-display-name" autocomplete="name" />
+                </label>
+                <div id="profile-feedback" class="feedback hidden"></div>
+                <button id="save-profile" class="primary-btn" type="submit">保存信息</button>
+              </form>
+
+              <form id="password-form" class="content-panel settings-form">
+                <div class="section-title">
+                  <h2>修改密码</h2>
+                  <p>新密码长度至少 6 位。</p>
+                </div>
+                <label class="form-field">
+                  <span>当前密码</span>
+                  <input id="current-password" type="password" autocomplete="current-password" required />
+                </label>
+                <label class="form-field">
+                  <span>新密码</span>
+                  <input id="new-password" type="password" autocomplete="new-password" required />
+                </label>
+                <div id="password-feedback" class="feedback hidden"></div>
+                <button id="save-password" class="primary-btn" type="submit">修改密码</button>
+              </form>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <div id="upload-dialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="upload-dialog-title">
+      <form id="upload-form" class="modal-panel">
+        <div class="modal-head">
+          <div>
+            <h2 id="upload-dialog-title">上传3D模型</h2>
+          </div>
+          <button id="close-upload-dialog" class="icon-btn" type="button" aria-label="关闭">×</button>
+        </div>
+        <label class="form-field file-field">
+          <span>3D模型文件上传</span>
+          <span class="file-picker">
+            <input id="model-upload-files" type="file" multiple accept=".glb,.gltf,.fbx,.obj,.stl,.bin,.mtl,.jpg,.jpeg,.png,.webp" />
+            <span class="file-button">选择文件</span>
+            <span id="model-upload-files-text" class="file-name">未选择任何文件</span>
+          </span>
+        </label>
+        <label class="form-field file-field">
+          <span>3D模型封面上传（可选）</span>
+          <span class="file-picker">
+            <input id="model-upload-cover" type="file" accept=".jpg,.jpeg,.png,.webp" />
+            <span class="file-button">选择文件</span>
+            <span id="model-upload-cover-text" class="file-name">未选择任何文件</span>
+          </span>
+        </label>
+        <label class="form-field">
+          <span>3D模型名称</span>
+          <input id="model-upload-name" autocomplete="off" placeholder="默认使用主文件名称" />
+        </label>
+        <div id="upload-feedback" class="feedback hidden" aria-live="polite"></div>
+        <div class="modal-actions">
+          <button id="cancel-upload-dialog" class="secondary-btn" type="button">取消</button>
+          <button id="upload-model-button" class="primary-btn" type="submit">保存</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="model-action-dialog" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="model-action-title">
+      <form id="model-action-form" class="modal-panel compact-modal">
+        <div class="modal-head">
+          <div>
+            <h2 id="model-action-title">模型操作</h2>
+            <p id="model-action-message"></p>
+          </div>
+          <button id="close-model-action-dialog" class="icon-btn" type="button" aria-label="关闭">×</button>
+        </div>
+        <label id="model-rename-field" class="form-field hidden">
+          <span>模型名称</span>
+          <input id="model-rename-input" autocomplete="off" maxlength="80" />
+        </label>
+        <label id="model-cover-field" class="form-field file-field hidden">
+          <span>模型封面图上传（可选）</span>
+          <span class="file-picker">
+            <input id="model-cover-input" type="file" accept=".jpg,.jpeg,.png,.webp" />
+            <span class="file-button">选择文件</span>
+            <span id="model-cover-input-text" class="file-name">未选择任何文件</span>
+          </span>
+        </label>
+        <div id="model-action-feedback" class="feedback hidden" aria-live="polite"></div>
+        <div class="modal-actions">
+          <button id="cancel-model-action-dialog" class="secondary-btn" type="button">取消</button>
+          <button id="confirm-model-action" class="primary-btn" type="submit">确认</button>
+        </div>
+      </form>
+    </div>
+
+    <script type="module" src="/model-work.js"></script>
+  </body>
+</html>
