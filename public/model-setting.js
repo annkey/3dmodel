@@ -8,7 +8,6 @@ const navItems = Array.from(document.querySelectorAll("[data-view]"));
 const views = {
   settings: document.getElementById("settings-view"),
   assets: document.getElementById("assets-view"),
-  clients: document.getElementById("clients-view"),
   users: document.getElementById("users-view"),
   credits: document.getElementById("credits-view")
 };
@@ -23,9 +22,6 @@ const createCreditButton = document.getElementById("create-credit");
 const assetTotal = document.getElementById("asset-total");
 const assetTableBody = document.getElementById("asset-table-body");
 const assetEmpty = document.getElementById("asset-empty");
-const clientTotal = document.getElementById("client-total");
-const clientTableBody = document.getElementById("client-table-body");
-const clientEmpty = document.getElementById("client-empty");
 const userTotal = document.getElementById("user-total");
 const userTableBody = document.getElementById("user-table-body");
 const userEmpty = document.getElementById("user-empty");
@@ -78,10 +74,6 @@ const viewMeta = {
     title: "模型管理",
     description: "查看模型生成任务列表，并下载已生成的模型资源。"
   },
-  clients: {
-    title: "访客管理",
-    description: "查看当前正在访问模型播放器的访客和浏览器基础参数。"
-  },
   users: {
     title: "用户管理",
     description: "维护后台用户账号、角色和启用状态。"
@@ -96,7 +88,6 @@ viewMeta.credits = {
 let apiConfig = null;
 let currentView = "settings";
 let assetRows = [];
-let clientRows = [];
 let userRows = [];
 let creditRows = [];
 let creditUsers = [];
@@ -144,8 +135,6 @@ function bindEvents() {
   searchInput.addEventListener("input", () => {
     if (currentView === "assets") {
       renderAssets();
-    } else if (currentView === "clients") {
-      renderClients();
     } else if (currentView === "users") {
       renderUsers();
     } else if (currentView === "credits") {
@@ -254,8 +243,6 @@ async function switchView(viewName) {
 async function refreshCurrentView() {
   if (currentView === "assets") {
     await refreshAssets();
-  } else if (currentView === "clients") {
-    await refreshClients();
   } else if (currentView === "users") {
     await refreshUsers();
   } else if (currentView === "credits") {
@@ -308,20 +295,6 @@ async function refreshAssets() {
   } catch (error) {
     assetRows = [];
     assetTableBody.innerHTML = renderMessageRow(6, error.message || "资源列表读取失败");
-  }
-}
-
-async function refreshClients() {
-  clientTableBody.innerHTML = renderLoadingRow(5, "正在读取访客列表...");
-  clientEmpty.classList.add("hidden");
-
-  try {
-    const data = await fetchJson("/api/admin/clients");
-    clientRows = (data.clients || []).filter((client) => client.active);
-    renderClients();
-  } catch (error) {
-    clientRows = [];
-    clientTableBody.innerHTML = renderMessageRow(5, error.message || "访客列表读取失败");
   }
 }
 
@@ -490,52 +463,6 @@ function renderAssetRow(task) {
       <td>${Number(task.progress || 0)}%</td>
       <td>${escapeHtml(formatTime(task.updatedAt))}</td>
       <td><div class="download-actions">${downloads || "<span class=\"muted\">暂无下载</span>"}</div></td>
-    </tr>
-  `;
-}
-
-function renderClients() {
-  const keyword = searchInput.value.trim().toLowerCase();
-  const rows = clientRows.filter((client) => {
-    const text = [
-      client.sessionId,
-      client.ip,
-      client.userAgent,
-      client.language,
-      client.timezone,
-      client.platform
-    ].join(" ").toLowerCase();
-    return !keyword || text.includes(keyword);
-  });
-
-  clientTotal.textContent = String(rows.length);
-  clientEmpty.classList.toggle("hidden", rows.length > 0);
-  clientTableBody.innerHTML = rows.map(renderClientRow).join("");
-}
-
-function renderClientRow(client) {
-  const viewport = formatSize(client.viewport);
-  const screen = formatSize(client.screen);
-
-  return `
-    <tr>
-      <td>
-        <div class="cell-main">
-          <strong>${escapeHtml(client.ip || "未知 IP")}</strong>
-          <small>${escapeHtml(client.sessionId || "-")}</small>
-          <small>${escapeHtml(client.path || "/model-preview.html")}</small>
-        </div>
-      </td>
-      <td>
-        <div class="cell-main">
-          <strong>${escapeHtml(getBrowserLabel(client.userAgent))}</strong>
-          <small>${escapeHtml(client.platform || "-")}</small>
-          <small>${escapeHtml(client.userAgent || "-")}</small>
-        </div>
-      </td>
-      <td>视口 ${escapeHtml(viewport)}<br><span class="muted">屏幕 ${escapeHtml(screen)}</span></td>
-      <td>${escapeHtml(client.language || "-")}<br><span class="muted">${escapeHtml(client.timezone || "-")}</span></td>
-      <td>${escapeHtml(formatTime(client.lastSeenAt))}</td>
     </tr>
   `;
 }

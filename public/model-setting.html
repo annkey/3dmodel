@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>KMAX 平台管理后台</title>
+    <title>KMAX 管理后台</title>
     <link rel="stylesheet" href="/model-setting.css" />
   </head>
   <body>
     <div class="admin-shell">
       <header class="admin-topbar">
         <a class="brand" href="/">
-          <span>KMAX 平台管理后台</span>
+          <span>KMAX 管理后台</span>
         </a>
         <div class="topbar-user">
           <button id="admin-user-menu-trigger" class="user-menu-trigger" type="button" aria-label="用户信息">
@@ -48,15 +48,6 @@
               </svg>
             </span>
             <span>模型管理</span>
-          </button>
-          <button class="nav-item" type="button" data-view="clients">
-            <span class="nav-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M12 12.5a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
-                <path d="M5 20c.7-3.4 3.2-5.3 7-5.3s6.3 1.9 7 5.3" />
-              </svg>
-            </span>
-            <span>访客管理</span>
           </button>
           <button class="nav-item" type="button" data-view="users">
             <span class="nav-icon" aria-hidden="true">
@@ -153,30 +144,6 @@
                 </table>
               </div>
               <p id="asset-empty" class="empty-state hidden">暂无模型生成任务。打开模型播放器提交生成任务后，这里会显示资源列表。</p>
-            </div>
-          </section>
-
-          <section id="clients-view" class="admin-view hidden">
-            <div class="table-panel">
-              <div class="table-summary">
-                <strong id="client-total">0</strong>
-                <span>个正在访问播放器的访客</span>
-              </div>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>访客</th>
-                      <th>浏览器</th>
-                      <th>屏幕</th>
-                      <th>语言 / 时区</th>
-                      <th>最后访问</th>
-                    </tr>
-                  </thead>
-                  <tbody id="client-table-body"></tbody>
-                </table>
-              </div>
-              <p id="client-empty" class="empty-state hidden">暂无正在访问模型播放器的访客。</p>
             </div>
           </section>
 

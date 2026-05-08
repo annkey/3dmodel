@@ -15,6 +15,7 @@ import {
   DEFAULT_PANORAMA_URL,
   GENERATED_TASK_STORAGE_KEY,
   GENERATOR_PROVIDER_CONFIG,
+  LAST_REMOTE_MODEL_STORAGE_KEY,
   LOCAL_MODEL_STORAGE_KEY,
   OPTIMIZER_PROVIDER_CONFIG,
   PREVIEW_TASK_STORAGE_LIMIT,
@@ -223,6 +224,7 @@ const penExplodePartGrabStartDragOffset = new THREE.Vector3();
 let penDragStartStylusPose = null;
 let currentObjectSource = "local";
 let currentRemoteModelUrl = "";
+let currentRemoteModelInfo = null;
 let currentPanoramaTexture = null;
 let currentPanoramaEnvironment = null;
 let currentPanoramaName = "";
@@ -1437,13 +1439,17 @@ function describeCurrentOptimizationTarget() {
   }
 
   if (currentObjectSource === "remote" && currentRemoteModelUrl) {
-    const fileName = getFileNameFromUrl(currentRemoteModelUrl) || modelName.textContent || "远程模型";
+    const fileName = currentRemoteModelInfo?.name
+      || modelName.textContent
+      || getFileNameFromUrl(currentRemoteModelUrl)
+      || "远程模型";
     return {
       ready: true,
       sourceType: "remote",
       modelUrl: currentRemoteModelUrl,
+      modelInfo: currentRemoteModelInfo,
       label: fileName,
-      extension: getExtension(fileName),
+      extension: currentRemoteModelInfo?.format || inferFormatFromUrl(currentRemoteModelUrl) || getExtension(fileName),
       text: "",
       note: ""
     };
@@ -1491,8 +1497,8 @@ function syncOptimizerFormState() {
   optimizerSplitFields?.classList.toggle("hidden", operation !== "split");
 
   if (optimizerCurrentModel) {
-    optimizerCurrentModel.textContent = target.ready ? "" : target.text;
-    optimizerCurrentModel.classList.toggle("hidden", target.ready);
+    optimizerCurrentModel.textContent = target.ready ? `当前优化对象：${target.label}` : target.text;
+    optimizerCurrentModel.classList.remove("hidden");
   }
 
   setFormNote(optimizerFormNote, "");
@@ -1770,7 +1776,14 @@ async function submitOptimizerTask({ provider, operation, target, modelVersion, 
   payload.append("saveMode", "new_revision");
 
   if (target.sourceType === "remote" && target.modelUrl) {
-    payload.append("modelUrl", target.modelUrl);
+    if (isSameOriginProtectedModelUrl(target.modelUrl)) {
+      const modelFile = await fetchCurrentRemoteModelAsFile(target);
+      payload.append("modelFile", modelFile);
+      payload.append("sourceModelUrl", target.modelUrl);
+      payload.append("sourceModelName", target.label || modelFile.name);
+    } else {
+      payload.append("modelUrl", target.modelUrl);
+    }
   } else if (target.modelFile) {
     payload.append("modelFile", target.modelFile);
   }
@@ -1795,6 +1808,66 @@ async function submitOptimizerTask({ provider, operation, target, modelVersion, 
     headers: getAuthHeadersForToken(authToken || authSession?.token),
     body: payload
   });
+}
+
+function isSameOriginProtectedModelUrl(modelUrl) {
+  const value = String(modelUrl || "");
+  try {
+    const parsed = new URL(value, window.location.origin);
+    return parsed.origin === window.location.origin && parsed.pathname.startsWith("/api/work/models/");
+  } catch {
+    return value.startsWith("/api/work/models/");
+  }
+}
+
+async function fetchCurrentRemoteModelAsFile(target) {
+  const protectedUrl = getSameOriginProtectedModelPath(target.modelUrl) || target.modelUrl;
+  const response = await fetch(protectedUrl, {
+    headers: getAuthenticatedModelHeaders(protectedUrl)
+  });
+  if (!response.ok) {
+    throw new Error(`当前模型文件读取失败：HTTP ${response.status}`);
+  }
+
+  const blob = await response.blob();
+  if (!blob.size) {
+    throw new Error("当前模型文件为空，无法提交优化。");
+  }
+
+  const extension = target.extension || inferFormatFromUrl(target.modelUrl) || "glb";
+  const fileName = sanitizeDownloadName(target.label || "current-model");
+  const normalizedName = fileName.toLowerCase().endsWith(`.${extension}`)
+    ? fileName
+    : `${fileName}.${extension}`;
+  return new File([blob], normalizedName, {
+    type: blob.type || getModelMimeType(extension)
+  });
+}
+
+function getModelMimeType(extension) {
+  const ext = String(extension || "").toLowerCase();
+  if (ext === "glb") return "model/gltf-binary";
+  if (ext === "gltf") return "model/gltf+json";
+  if (ext === "obj") return "model/obj";
+  if (ext === "stl") return "model/stl";
+  if (ext === "fbx") return "application/octet-stream";
+  return "application/octet-stream";
+}
+
+function getSameOriginProtectedModelPath(modelUrl) {
+  const value = String(modelUrl || "");
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (parsed.origin === window.location.origin && parsed.pathname.startsWith("/api/work/models/")) {
+      return `${parsed.pathname}${parsed.search}`;
+    }
+  } catch {
+    if (value.startsWith("/api/work/models/")) {
+      return value;
+    }
+  }
+
+  return "";
 }
 
 async function pollOptimizerTask(taskId, provider, operation) {
@@ -1907,6 +1980,7 @@ async function downloadOptimizationResult() {
   }
 
   try {
+    const downloadable = getOptimizationDownloadPlayable();
     const data = await fetchJson("/api/credits/consume-download", {
       method: "POST",
       headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
@@ -1916,16 +1990,26 @@ async function downloadOptimizationResult() {
       })
     });
     updateAuthCreditsFromResponse(data);
-    const extension = getExtension(activeOptimizationPlayable.format || inferFormatFromUrl(activeOptimizationPlayable.url) || "glb") || "glb";
+    const extension = getExtension(downloadable.format || inferFormatFromUrl(downloadable.url) || "glb") || "glb";
     const safeName = sanitizeDownloadName(`${modelName.textContent || "current-model"}-optimized`);
     const link = document.createElement("a");
-    link.href = buildAssetProxyUrl(activeOptimizationPlayable.url);
+    link.href = buildAssetProxyUrl(downloadable.url);
     link.download = `${safeName}.${extension}`;
     link.click();
     setStatus("优化模型下载已开始");
   } catch (error) {
     setStatus(error.message || "优化模型下载失败");
   }
+}
+
+function getOptimizationDownloadPlayable() {
+  const task = activeOptimizationPlayable?.task || {};
+  const glbUrl = task.modelUrls?.glb || task.output?.glb;
+  if (glbUrl) {
+    return { url: glbUrl, format: "glb" };
+  }
+
+  return activeOptimizationPlayable;
 }
 
 function getGeneratorDefaults(provider) {
@@ -2067,6 +2151,11 @@ function loadModelFromUrlParams() {
   if (!modelUrl) {
     if (params.get("localModel")) {
       setStatus("请重新选择本地模型文件进行预览");
+      return;
+    }
+    const lastRemoteModel = parseStoredJson(LAST_REMOTE_MODEL_STORAGE_KEY, null);
+    if (lastRemoteModel?.modelUrl) {
+      void playRemoteModelFromRecord(lastRemoteModel, { updateUrl: true });
     }
     return;
   }
@@ -2076,14 +2165,55 @@ function loadModelFromUrlParams() {
     prompt: params.get("name") || stripExtension(getFileNameFromUrl(modelUrl)) || "AI生成模型",
     providerName: params.get("source") || "AI生成",
     provider: params.get("provider") || "",
+    preferredModelUrl: modelUrl,
+    format: params.get("format") || inferFormatFromUrl(modelUrl)
+  };
+  void playRemoteModelFromRecord(task);
+}
+
+async function playRemoteModelFromRecord(record, options = {}) {
+  if (!record?.preferredModelUrl && !record?.modelUrl) {
+    return;
+  }
+
+  if (activePlaybackLoadingTaskId) {
+    setStatus("已有模型正在加载中，请等待当前加载完成后再切换");
+    return;
+  }
+
+  const modelUrl = record.preferredModelUrl || record.modelUrl;
+  const task = {
+    id: record.id || record.taskId || modelUrl,
+    prompt: record.prompt || record.name || stripExtension(getFileNameFromUrl(modelUrl)) || "模型",
     preferredModelUrl: modelUrl
   };
-  void loadRemoteModel(modelUrl, {
-    name: task.prompt,
-    formatHint: params.get("format") || inferFormatFromUrl(modelUrl),
-    timeoutMs: MODEL_PLAYBACK_TIMEOUT_MS,
-    taskId: task.id
-  });
+
+  if (options.updateUrl) {
+    updateRemoteModelUrlParams({
+      ...record,
+      id: task.id,
+      name: task.prompt,
+      modelUrl
+    });
+  }
+
+  beginPlaybackLoading(task);
+  try {
+    const loaded = await loadRemoteModel(modelUrl, {
+      name: task.prompt,
+      formatHint: record.format || inferFormatFromUrl(modelUrl),
+      timeoutMs: MODEL_PLAYBACK_TIMEOUT_MS,
+      taskId: task.id,
+      provider: record.provider || "",
+      source: record.providerName || record.source || ""
+    });
+
+    if (!loaded) {
+      setStatus("模型加载失败，请稍后重试");
+    }
+  } finally {
+    endPlaybackLoading();
+  }
 }
 
 function saveGeneratedTasks() {
@@ -2466,6 +2596,8 @@ function applySelectedFiles(files) {
     endLocalSelectionLoading();
   }
 
+  currentRemoteModelInfo = null;
+
   for (const file of files) {
     resourceMap.set(file.name, file);
   }
@@ -2637,6 +2769,15 @@ async function loadRemoteModel(modelUrl, options = {}) {
     }
     currentObjectSource = "remote";
     currentRemoteModelUrl = modelUrl;
+    currentRemoteModelInfo = {
+      id: options.taskId || modelUrl,
+      name: modelLabel,
+      modelUrl,
+      format: String(formatHint || inferFormatFromUrl(modelUrl) || "").toLowerCase(),
+      source: options.source || "",
+      provider: options.provider || "",
+      openedAt: new Date().toISOString()
+    };
     applyWireframeState();
     captureStereoReferenceCamera();
     updatePlaybackLoadingProgress({
@@ -2646,6 +2787,8 @@ async function loadRemoteModel(modelUrl, options = {}) {
       percent: 100
     });
     setStatus("生成模型已载入预览器");
+    saveLastRemoteModel(currentRemoteModelInfo);
+    updateRemoteModelUrlParams(currentRemoteModelInfo);
     syncOptimizerFormState();
     return true;
   } catch (error) {
@@ -3042,6 +3185,7 @@ function clearCurrentObject() {
     animationMixer = null;
     currentObjectSource = "local";
     currentRemoteModelUrl = "";
+    currentRemoteModelInfo = null;
     currentModelFileSizeBytes = 0;
     updateExplodeButton();
     updateInteractionModeButton();
@@ -3055,6 +3199,7 @@ function clearCurrentObject() {
   animationMixer = null;
   currentObjectSource = "local";
   currentRemoteModelUrl = "";
+  currentRemoteModelInfo = null;
   currentModelFileSizeBytes = 0;
   resetStereoSceneFit();
   updateExplodeButton();
@@ -5289,6 +5434,41 @@ function saveRecentEntry(entry) {
   const next = [entry, ...current.filter((item) => item.name !== entry.name)].slice(0, 6);
   localStorage.setItem(RECENT_STORAGE_KEY, JSON.stringify(next));
   renderRecentEntries(next);
+}
+
+function saveLastRemoteModel(model) {
+  if (!model?.modelUrl) {
+    return;
+  }
+
+  localStorage.setItem(LAST_REMOTE_MODEL_STORAGE_KEY, JSON.stringify({
+    id: model.id || model.modelUrl,
+    name: model.name || stripExtension(getFileNameFromUrl(model.modelUrl)) || "模型",
+    modelUrl: model.modelUrl,
+    format: model.format || inferFormatFromUrl(model.modelUrl),
+    source: model.source || "",
+    provider: model.provider || "",
+    openedAt: model.openedAt || new Date().toISOString()
+  }));
+}
+
+function updateRemoteModelUrlParams(model) {
+  if (!model?.modelUrl) {
+    return;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("modelUrl") === model.modelUrl) {
+    return;
+  }
+
+  params.set("modelUrl", model.modelUrl);
+  params.set("taskId", model.id || model.modelUrl);
+  params.set("name", model.name || stripExtension(getFileNameFromUrl(model.modelUrl)) || "模型");
+  params.set("format", model.format || inferFormatFromUrl(model.modelUrl) || "");
+  params.set("provider", model.provider || "upload");
+  params.set("source", model.source || "我的模型");
+  window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
 }
 
 function saveLocalModelEntry(entry) {
