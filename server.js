@@ -820,9 +820,9 @@ async function handleApi(req, res, requestUrl) {
       }
 
       if (provider === "meshy") {
-        await handleMeshyGenerate(res, form);
+        await handleMeshyGenerate(res, form, session.user.id);
       } else {
-        await handleTripoGenerate(res, form);
+        await handleTripoGenerate(res, form, session.user.id);
       }
       return;
     } catch (error) {
@@ -988,7 +988,7 @@ async function handleApi(req, res, requestUrl) {
   });
 }
 
-async function handleTripoGenerate(res, form) {
+async function handleTripoGenerate(res, form, userId = "") {
   ensureProviderEnabled("tripo");
 
   const mode = String(form.get("mode") || "text");
@@ -1090,7 +1090,8 @@ async function handleTripoGenerate(res, form) {
     providerName: "Tripo3D",
     mode,
     prompt,
-    modelVersion
+    modelVersion,
+    userId
   });
   sendJson(res, 200, responseBody);
 }
@@ -1114,7 +1115,7 @@ async function handleTripoTaskQuery(res, taskId, userId = "") {
     statusText: taskResult.status,
     progress: typeof taskResult.progress === "number" ? taskResult.progress : 0,
     finalized: TRIPO_FINAL_STATUSES.has(taskResult.status),
-    stageText: "Tripo3D 鐢熸垚浠诲姟",
+    stageText: "Tripo3D 生成任务",
     displayModelVersion: taskResult.input?.model_version || "",
     input: taskResult.input || {},
     output,
@@ -1134,7 +1135,7 @@ async function handleTripoTaskQuery(res, taskId, userId = "") {
   sendJson(res, 200, responseBody);
 }
 
-async function handleMeshyGenerate(res, form) {
+async function handleMeshyGenerate(res, form, userId = "") {
   ensureProviderEnabled("meshy");
 
   const mode = String(form.get("mode") || "text");
@@ -1233,7 +1234,8 @@ async function handleMeshyGenerate(res, form) {
     providerName: "Meshy",
     mode,
     prompt,
-    modelVersion
+    modelVersion,
+    userId
   });
   sendJson(res, 200, responseBody);
 }
@@ -1247,17 +1249,18 @@ async function handleMeshyTaskQuery(res, taskId, userId = "") {
 
   if (task.type === "text-to-3d-preview" && task.status === "SUCCEEDED") {
     const refineTaskId = await ensureMeshyRefineTask(task.id || taskId, context);
+    generatedTaskRecords.delete(task.id || taskId);
     sendJson(res, 200, {
       ...normalized,
       finalized: false,
       progress: 100,
       status: "running",
-      statusText: "棰勮闃舵瀹屾垚锛屾鍦ㄨ繘鍏ヨ创鍥鹃樁娈?..",
-      stageText: "Meshy 璐村浘闃舵",
+      statusText: "预览阶段完成，正在进入精修阶段...",
+      stageText: "Meshy 精修阶段",
       transition: {
         nextTaskId: refineTaskId,
-        stageText: "Meshy 璐村浘闃舵",
-        statusText: "棰勮闃舵瀹屾垚锛屾鍦ㄨ繘鍏ヨ创鍥鹃樁娈?.."
+        stageText: "Meshy 精修阶段",
+        statusText: "预览阶段完成，正在进入精修阶段..."
       }
     });
     return;
@@ -1404,7 +1407,7 @@ function normalizeMeshyRetextureTask(task, context, fallbackTaskId) {
     statusText: task.task_error?.message || normalizedStatus,
     progress: typeof task.progress === "number" ? task.progress : 0,
     finalized: NORMALIZED_FINAL_STATUSES.has(normalizedStatus),
-    stageText: "Meshy AI璐村浘浠诲姟",
+    stageText: "Meshy AI 贴图任务",
     displayModelVersion: context?.modelVersion || task.ai_model || "latest",
     input: {
       textStylePrompt: task.text_style_prompt || "",
@@ -1821,25 +1824,25 @@ function inferTripoMode(type) {
 
 function inferMeshyStageText(type) {
   if (type === "text-to-3d-preview") {
-    return "Meshy 棰勮闃舵";
+    return "Meshy 预览阶段";
   }
 
   if (type === "text-to-3d-refine") {
-    return "Meshy 璐村浘闃舵";
+    return "Meshy 精修阶段";
   }
 
   if (String(type).includes("image")) {
-    return "Meshy 鍥剧墖鐢熸垚闃舵";
+    return "Meshy 图片生成阶段";
   }
 
-  return "Meshy 鐢熸垚浠诲姟";
+  return "Meshy 生成任务";
 }
 
 function buildTripoDownloadItems(output) {
   const items = [];
-  if (output.model) items.push({ label: "涓嬭浇妯″瀷", url: output.model });
-  if (output.pbr_model) items.push({ label: "涓嬭浇 PBR 妯″瀷", url: output.pbr_model });
-  if (output.base_model) items.push({ label: "涓嬭浇 Base 妯″瀷", url: output.base_model });
+  if (output.model) items.push({ label: "下载模型", url: output.model });
+  if (output.pbr_model) items.push({ label: "下载 PBR 模型", url: output.pbr_model });
+  if (output.base_model) items.push({ label: "下载 Base 模型", url: output.base_model });
   if (output.rendered_image || output.generated_image) {
     items.push({ label: "下载预览图", url: output.rendered_image || output.generated_image });
   }
@@ -1848,19 +1851,19 @@ function buildTripoDownloadItems(output) {
 
 function buildMeshyDownloadItems(modelUrls, thumbnailUrl) {
   const labels = {
-    glb: "涓嬭浇 GLB",
-    pre_remeshed_glb: "涓嬭浇鍘熷 GLB",
-    fbx: "涓嬭浇 FBX",
-    obj: "涓嬭浇 OBJ",
-    mtl: "涓嬭浇 MTL",
-    stl: "涓嬭浇 STL",
-    usdz: "涓嬭浇 USDZ"
+    glb: "下载 GLB",
+    pre_remeshed_glb: "下载原始 GLB",
+    fbx: "下载 FBX",
+    obj: "下载 OBJ",
+    mtl: "下载 MTL",
+    stl: "下载 STL",
+    usdz: "下载 USDZ"
   };
 
   const items = [];
   for (const [key, url] of Object.entries(modelUrls || {})) {
     if (url) {
-      items.push({ label: labels[key] || `涓嬭浇 ${key.toUpperCase()}`, url });
+      items.push({ label: labels[key] || `下载 ${key.toUpperCase()}`, url });
     }
   }
 
@@ -1873,6 +1876,7 @@ function buildMeshyDownloadItems(modelUrls, thumbnailUrl) {
 
 function buildAdminAssetResponse() {
   const tasks = Array.from(generatedTaskRecords.values())
+    .filter((task) => !(task.provider === "meshy" && meshyRefineTasks.has(task.taskId || task.id)))
     .sort((left, right) => {
       const leftTime = Date.parse(left.updatedAt || left.createdAt || 0) || 0;
       const rightTime = Date.parse(right.updatedAt || right.createdAt || 0) || 0;
@@ -2002,6 +2006,10 @@ async function handleUserModelUpload(req, userId) {
   const uploadId = crypto.randomUUID();
   const uploadDir = getUserModelUploadDir(userId, uploadId);
   await fsp.mkdir(uploadDir, { recursive: true });
+  const startedAt = Date.now();
+  req.on("aborted", () => {
+    console.warn("User model upload request aborted", { userId, uploadId });
+  });
 
   let uploaded;
   try {
@@ -2010,6 +2018,13 @@ async function handleUserModelUpload(req, userId) {
       userId,
       initialUsedBytes: storage.usedBytes,
       quotaBytes: storage.quotaBytes
+    });
+    console.log("User model upload received", {
+      userId,
+      uploadId,
+      fileCount: uploaded.files.length,
+      totalBytes: uploaded.totalBytes,
+      elapsedMs: Date.now() - startedAt
     });
   } catch (error) {
     await fsp.rm(uploadDir, { recursive: true, force: true });
@@ -2036,6 +2051,13 @@ async function handleUserModelUpload(req, userId) {
   if (MODEL_STORAGE_DRIVER === "oss") {
     try {
       await uploadUserModelFilesToOss(userId, uploadId, uploaded.files, uploadDir);
+      console.log("User model upload stored in OSS", {
+        userId,
+        uploadId,
+        fileCount: uploaded.files.length,
+        totalBytes: uploaded.totalBytes,
+        elapsedMs: Date.now() - startedAt
+      });
       await fsp.rm(uploadDir, { recursive: true, force: true });
     } catch (error) {
       await fsp.rm(uploadDir, { recursive: true, force: true });
@@ -3536,10 +3558,10 @@ async function attachPersistedGeneratedModel(task, userId) {
       model: publicModel.modelUrl,
       glb: publicModel.format === "GLB" ? publicModel.modelUrl : task.modelUrls?.glb || null
     };
-    task.downloadItems = [{ label: "Download model", url: publicModel.modelUrl }];
+    task.downloadItems = [{ label: "下载模型", url: publicModel.modelUrl }];
     if (publicModel.coverUrl) {
       task.renderedImage = publicModel.coverUrl;
-      task.downloadItems.push({ label: "Download cover", url: publicModel.coverUrl });
+      task.downloadItems.push({ label: "下载预览图", url: publicModel.coverUrl });
     } else {
       task.renderedImage = "";
     }
@@ -3990,6 +4012,7 @@ async function deleteOssObject(objectKey) {
 
 function requestOssObject({ method, objectKey, filePath = "", contentType = "", contentLength = 0, headers = {} }) {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const date = new Date().toUTCString();
     const requestHeaders = {
       Date: date,
@@ -4011,9 +4034,22 @@ function requestOssObject({ method, objectKey, filePath = "", contentType = "", 
       hostname: ALIYUN_OSS_ENDPOINT,
       path: `/${encodeOssObjectKey(objectKey)}`,
       headers: requestHeaders
-    }, resolve);
+    }, (response) => {
+      settled = true;
+      resolve(response);
+    });
 
-    request.on("error", reject);
+    request.on("error", (error) => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
+    request.setTimeout(10 * 60 * 1000, () => {
+      if (!settled) {
+        request.destroy(new Error("OSS request timed out."));
+      }
+    });
     if (filePath) {
       fs.createReadStream(filePath)
         .on("error", reject)
@@ -4407,12 +4443,12 @@ function buildDownloadItemsFromTask(task, modelUrls) {
   const items = [];
   const preferredModelUrl = normalizeText(task?.preferredModelUrl);
   if (preferredModelUrl) {
-    items.push({ label: "涓嬭浇妯″瀷", url: preferredModelUrl });
+    items.push({ label: "下载模型", url: preferredModelUrl });
   }
 
   for (const [key, url] of Object.entries(modelUrls || {})) {
     if (url && !items.some((item) => item.url === url)) {
-      items.push({ label: `涓嬭浇 ${key}`, url });
+      items.push({ label: `下载 ${key}`, url });
     }
   }
 

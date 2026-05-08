@@ -171,6 +171,15 @@
           <span>3D模型名称</span>
           <input id="model-upload-name" autocomplete="off" placeholder="默认使用主文件名称" />
         </label>
+        <div id="upload-progress" class="upload-progress hidden" aria-live="polite">
+          <div class="upload-progress-head">
+            <span id="upload-progress-label">上传进度</span>
+            <strong id="upload-progress-value">0%</strong>
+          </div>
+          <div class="upload-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <span id="upload-progress-fill"></span>
+          </div>
+        </div>
         <div id="upload-feedback" class="feedback hidden" aria-live="polite"></div>
         <div class="modal-actions">
           <button id="cancel-upload-dialog" class="secondary-btn" type="button">取消</button>

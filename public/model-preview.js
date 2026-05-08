@@ -908,18 +908,48 @@ function renderSharedModelCard(model) {
 }
 
 async function playSharedModel(modelId) {
+  if (activePlaybackLoadingTaskId) {
+    setStatus(
+      activePlaybackLoadingTaskId === modelId
+        ? "模型正在加载中，请稍候..."
+        : "已有模型正在加载中，请等待当前加载完成后再切换"
+    );
+    return;
+  }
+
   const model = (sharedModelsCache || []).find((item) => item.id === modelId);
   if (!model?.modelUrl) {
     setStatus("当前公开模型暂无可播放文件");
     return;
   }
+
+  const task = {
+    id: model.id,
+    prompt: model.name || model.entryFile || "公开模型",
+    preferredModelUrl: model.modelUrl
+  };
+
   closeModal(onlineModelModal);
+  beginPlaybackLoading(task);
   setStatus("正在加载公开分享模型...");
-  await loadRemoteModel(model.modelUrl, {
-    taskId: model.id,
-    name: model.name || "公开模型",
-    formatHint: model.format || inferFormatFromUrl(model.modelUrl)
-  });
+
+  try {
+    const loaded = await loadRemoteModel(model.modelUrl, {
+      taskId: model.id,
+      name: task.prompt,
+      formatHint: model.format || inferFormatFromUrl(model.modelUrl),
+      timeoutMs: MODEL_PLAYBACK_TIMEOUT_MS
+    });
+
+    if (loaded) {
+      setStatus("公开分享模型已载入预览器");
+    }
+  } catch (error) {
+    modelMeta.textContent = formatPreviewError(error);
+    setStatus("公开分享模型加载失败");
+  } finally {
+    endPlaybackLoading();
+  }
 }
 
 function restoreAuthSession() {

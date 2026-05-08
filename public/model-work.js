@@ -34,6 +34,11 @@ const uploadCover = document.getElementById("model-upload-cover");
 const uploadName = document.getElementById("model-upload-name");
 const uploadFilesText = document.getElementById("model-upload-files-text");
 const uploadCoverText = document.getElementById("model-upload-cover-text");
+const uploadProgress = document.getElementById("upload-progress");
+const uploadProgressLabel = document.getElementById("upload-progress-label");
+const uploadProgressValue = document.getElementById("upload-progress-value");
+const uploadProgressTrack = document.querySelector(".upload-progress-track");
+const uploadProgressFill = document.getElementById("upload-progress-fill");
 const uploadFeedback = document.getElementById("upload-feedback");
 const uploadButton = document.getElementById("upload-model-button");
 const modelActionDialog = document.getElementById("model-action-dialog");
@@ -88,6 +93,8 @@ let currentView = "models";
 let pendingModelAction = null;
 const modelCoverObjectUrls = new Map();
 let modelShareField = null;
+let currentUploadController = null;
+let uploadCancelledByUser = false;
 
 bootstrap();
 
@@ -277,6 +284,11 @@ async function refreshUploadedModels() {
 }
 
 async function uploadModelFiles() {
+  if (currentUploadController) {
+    showFeedback(uploadFeedback, "已有上传任务正在进行，请先取消当前上传。", "error");
+    return;
+  }
+
   const files = Array.from(uploadFiles.files || []);
   const coverFile = uploadCover.files?.[0] || null;
   if (!files.length) {
@@ -304,27 +316,49 @@ async function uploadModelFiles() {
   }
   form.append("name", uploadName.value.trim());
 
+  let uploadRequest = null;
+  uploadCancelledByUser = false;
   uploadButton.disabled = true;
   uploadButton.textContent = "上传中...";
+  updateUploadProgress(0, "准备上传");
   showFeedback(uploadFeedback, "正在上传到服务器，请保持页面打开。", "success");
 
   try {
-    const data = await fetchJson("/api/work/models", {
-      method: "POST",
+    const data = await uploadFormDataWithProgress("/api/work/models", form, {
       headers: getAuthHeaders(),
-      body: form
+      onRequest: (request) => {
+        uploadRequest = request;
+        currentUploadController = request;
+      },
+      onProgress: (percent, event) => {
+        const loaded = formatBytes(event.loaded);
+        const total = event.lengthComputable ? formatBytes(event.total) : "";
+        updateUploadProgress(percent, total ? `正在上传 ${loaded} / ${total}` : `正在上传 ${loaded}`);
+      },
+      onProcessing: () => {
+        updateUploadProgress(100, "上传完成，服务器正在保存到 OSS");
+      }
     });
     uploadedModels = data.models || [];
     storage = data.storage || storage;
     uploadForm.reset();
     updateUploadFileTexts();
-    closeUploadDialog();
+    currentUploadController = null;
+    closeUploadDialog({ abortUpload: false });
     renderStorage();
     renderModels();
     showFeedback(modelFeedback, "模型文件已上传到服务器。", "success");
   } catch (error) {
+    if (error.name === "AbortError" || uploadCancelledByUser) {
+      showFeedback(modelFeedback, "上传已取消，未完成的文件不会加入模型库。", "success");
+      return;
+    }
     showFeedback(uploadFeedback, error.message || "模型文件上传失败。", "error");
   } finally {
+    if (currentUploadController === uploadRequest) {
+      currentUploadController = null;
+    }
+    uploadCancelledByUser = false;
     uploadButton.disabled = false;
     uploadButton.textContent = "上传到服务器";
   }
@@ -1117,15 +1151,104 @@ async function logout() {
 
 function openUploadDialog() {
   showFeedback(uploadFeedback, "");
+  if (!currentUploadController) {
+    resetUploadProgress();
+  }
   uploadDialog?.classList.remove("hidden");
   uploadFiles?.focus();
 }
 
-function closeUploadDialog() {
+function closeUploadDialog(options = {}) {
+  const shouldAbortUpload = options?.abortUpload !== false;
+  if (shouldAbortUpload && currentUploadController) {
+    uploadCancelledByUser = true;
+    currentUploadController.abort();
+  }
   uploadDialog?.classList.add("hidden");
   if (!uploadButton?.disabled) {
     showFeedback(uploadFeedback, "");
+    resetUploadProgress();
   }
+}
+
+function updateUploadProgress(percent, label = "") {
+  const value = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  uploadProgress?.classList.remove("hidden");
+  if (uploadProgressLabel) {
+    uploadProgressLabel.textContent = label || "上传进度";
+  }
+  if (uploadProgressValue) {
+    uploadProgressValue.textContent = `${value}%`;
+  }
+  if (uploadProgressFill) {
+    uploadProgressFill.style.width = `${value}%`;
+  }
+  if (uploadProgressTrack) {
+    uploadProgressTrack.setAttribute("aria-valuenow", String(value));
+  }
+}
+
+function resetUploadProgress() {
+  uploadProgress?.classList.add("hidden");
+  if (uploadProgressLabel) {
+    uploadProgressLabel.textContent = "上传进度";
+  }
+  if (uploadProgressValue) {
+    uploadProgressValue.textContent = "0%";
+  }
+  if (uploadProgressFill) {
+    uploadProgressFill.style.width = "0";
+  }
+  if (uploadProgressTrack) {
+    uploadProgressTrack.setAttribute("aria-valuenow", "0");
+  }
+}
+
+function uploadFormDataWithProgress(url, form, { headers = {}, onRequest, onProgress, onProcessing } = {}) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", url);
+    request.responseType = "text";
+    Object.entries(headers || {}).forEach(([key, value]) => {
+      request.setRequestHeader(key, value);
+    });
+    request.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) {
+        onProgress?.(0, event);
+        return;
+      }
+      onProgress?.((event.loaded / event.total) * 100, event);
+      if (event.loaded >= event.total) {
+        onProcessing?.();
+      }
+    });
+    request.addEventListener("load", () => {
+      const text = request.responseText || "";
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = {};
+      }
+      if (request.status < 200 || request.status >= 300) {
+        const error = new Error(data.message || "请求失败");
+        error.status = request.status;
+        error.data = data;
+        reject(error);
+        return;
+      }
+      resolve(data);
+    });
+    request.addEventListener("abort", () => {
+      const error = new DOMException("Upload aborted.", "AbortError");
+      reject(error);
+    });
+    request.addEventListener("error", () => reject(new Error("网络连接中断，模型文件上传失败。")));
+    request.addEventListener("timeout", () => reject(new Error("模型文件上传超时，请稍后重试。")));
+    request.timeout = 15 * 60 * 1000;
+    onRequest?.(request);
+    request.send(form);
+  });
 }
 
 async function fetchJson(url, options) {
