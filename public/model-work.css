@@ -43,6 +43,18 @@ a {
   text-decoration: none;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .work-shell {
   display: grid;
   grid-template-rows: 58px minmax(0, 1fr);
@@ -648,6 +660,35 @@ a {
   font-size: 19px;
 }
 
+.record-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.record-search {
+  min-width: 220px;
+}
+
+.record-search input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 11px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.record-search input:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(47, 112, 237, 0.12);
+}
+
 .record-list {
   display: grid;
   gap: 10px;
@@ -661,9 +702,28 @@ a {
   border-bottom: 1px solid var(--line);
 }
 
+.record-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.record-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.record-line > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .record-item strong {
-  display: block;
-  margin-bottom: 4px;
+  flex: 0 1 auto;
 }
 
 .record-amount.plus {
@@ -885,6 +945,15 @@ a {
   .modal-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .record-title-row {
+    flex-direction: column;
+  }
+
+  .record-search {
+    width: 100%;
+    min-width: 0;
   }
 
   .control-select,

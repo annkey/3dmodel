@@ -81,14 +81,20 @@
                 <strong id="optimize-cost">-</strong>
               </article>
               <article class="summary-card">
-                <span>自费充值</span>
+                <span>积分充值</span>
                 <strong class="summary-text">联系管理员</strong>
               </article>
             </div>
             <div class="content-panel">
-              <div class="section-title">
-                <h2>积分记录</h2>
-                <p>积分充值和扣除由管理员在管理后台新增记录。</p>
+              <div class="section-title record-title-row">
+                <div>
+                  <h2>积分记录</h2>
+                  <p>积分充值和扣除由管理员在管理后台新增记录。</p>
+                </div>
+                <label class="record-search">
+                  <span class="sr-only">搜索积分记录</span>
+                  <input id="credit-record-search" type="search" placeholder="搜索积分记录" autocomplete="off" />
+                </label>
               </div>
               <div id="credit-records" class="record-list"></div>
               <p id="credit-empty" class="empty-state hidden">暂无积分记录。</p>

@@ -51,6 +51,7 @@ const cancelModelActionDialogButton = document.getElementById("cancel-model-acti
 const creditBalance = document.getElementById("credit-balance");
 const generateCost = document.getElementById("generate-cost");
 const optimizeCost = document.getElementById("optimize-cost");
+const creditRecordSearch = document.getElementById("credit-record-search");
 const creditRecords = document.getElementById("credit-records");
 const creditEmpty = document.getElementById("credit-empty");
 const profileForm = document.getElementById("profile-form");
@@ -69,7 +70,7 @@ const viewMeta = {
   },
   credits: {
     title: "我的积分",
-    description: "查看积分余额、消耗和管理员充值记录。"
+    description: "查看积分余额、消耗和充值记录。"
   },
   profile: {
     title: "我的信息",
@@ -156,6 +157,7 @@ function bindEvents() {
     event.preventDefault();
     void savePassword();
   });
+  creditRecordSearch?.addEventListener("input", renderCredits);
   modelList.addEventListener("click", (event) => {
     const menuButton = event.target.closest("[data-model-menu-id]");
     if (menuButton) {
@@ -845,7 +847,7 @@ function buildDownloadFileName(model, title) {
 }
 
 async function resolveModelDownloadSource(model) {
-  if (model?.source !== "ai" || !model?.id || model.localGenerated) {
+  if (!model?.id || model.localGenerated) {
     return {
       source: "local",
       url: model?.modelUrl || "",
@@ -855,12 +857,14 @@ async function resolveModelDownloadSource(model) {
 
   const endpoint = `/api/work/models/${encodeURIComponent(model.id)}/download-source?format=${encodeURIComponent(model.format || "")}`;
   try {
-    const data = await fetchJson(endpoint);
+    const data = await fetchJson(endpoint, { headers: getAuthHeaders() });
     if (data?.url) {
+      updateCreditsFromResponse(data);
       return data;
     }
   } catch (error) {
     console.warn("Model download source resolve failed", error);
+    throw error;
   }
 
   return {
@@ -992,16 +996,34 @@ function renderCredits() {
   creditBalance.textContent = String(credits.balance || 0);
   generateCost.textContent = `${credits.costs?.generate || 0} / 次`;
   optimizeCost.textContent = `${credits.costs?.optimize || 0} / 次`;
-  const records = credits.records || [];
+  const query = normalizeSearchText(creditRecordSearch?.value || "");
+  const allRecords = credits.records || [];
+  const records = query
+    ? allRecords.filter((record) => normalizeSearchText([
+      formatCreditRecordTitle(record),
+      record.type,
+      record.amount,
+      record.balance,
+      record.note,
+      formatTime(record.createdAt)
+    ].join(" ")).includes(query))
+    : allRecords;
+  creditEmpty.textContent = allRecords.length && query ? "没有匹配的积分记录。" : "暂无积分记录。";
   creditEmpty.classList.toggle("hidden", records.length > 0);
   creditRecords.innerHTML = records.map((record) => {
     const plus = Number(record.amount) > 0;
+    const reason = record.note || formatCreditRecordTitle(record);
     return `
       <article class="record-item">
-        <div>
-          <strong>${escapeHtml(formatCreditRecordTitle(record))}</strong>
-          <span class="muted">${escapeHtml(formatTime(record.createdAt))} · 余额 ${escapeHtml(record.balance)}</span>
-          ${record.note ? `<p class="muted">${escapeHtml(record.note)}</p>` : ""}
+        <div class="record-copy">
+          <div class="record-line">
+            <strong>${escapeHtml(formatCreditRecordTitle(record))}</strong>
+            <span class="muted">${escapeHtml(formatTime(record.createdAt))}</span>
+          </div>
+          <div class="record-line muted">
+            <span>余额 ${escapeHtml(record.balance)}</span>
+            <span>${escapeHtml(reason)}</span>
+          </div>
         </div>
         <span class="record-amount ${plus ? "plus" : "minus"}">${plus ? "+" : ""}${escapeHtml(record.amount)}</span>
       </article>
@@ -1009,11 +1031,26 @@ function renderCredits() {
   }).join("");
 }
 
+function normalizeSearchText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
 function formatCreditRecordTitle(record) {
   if (record?.title) return record.title;
   if (record?.type === "share_gift") return "分享赠送";
   if (record?.type === "share_cancel_deduct") return "取消分享扣分";
   return "积分记录";
+}
+
+function updateCreditsFromResponse(data) {
+  if (!data?.credits) {
+    return;
+  }
+
+  credits = data.credits;
+  if (currentView === "credits") {
+    renderCredits();
+  }
 }
 
 function renderProfile() {

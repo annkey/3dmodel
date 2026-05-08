@@ -75,7 +75,25 @@ const PLAYER_CLIENT_ACTIVE_MS = 2 * 60 * 1000;
 const AUTH_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const CREDIT_COSTS = {
   generate: 10,
-  optimize: 5
+  optimize: 5,
+  download: 2
+};
+const CREDIT_ACTIONS = {
+  generate: {
+    costKey: "generate",
+    type: "ai_generate",
+    title: "AI生成模型"
+  },
+  optimize: {
+    costKey: "optimize",
+    type: "ai_optimize",
+    title: "AI模型优化"
+  },
+  download: {
+    costKey: "download",
+    type: "model_download",
+    title: "模型下载"
+  }
 };
 const AUTO_CREDIT_RULES = {
   new_user_default: 50
@@ -490,12 +508,46 @@ async function handleApi(req, res, requestUrl) {
   if (workModelDownloadSourceMatch && req.method === "GET") {
     try {
       const session = assertAuthenticated(req);
+      assertUserHasCreditsForAction(session.user.id, "download");
       const result = await resolveUserModelDownloadSource(session.user.id, workModelDownloadSourceMatch[1], requestUrl);
-      sendJson(res, 200, result);
+      const creditRecord = consumeUserCreditsForAction(session.user.id, "download", {
+        modelId: workModelDownloadSourceMatch[1],
+        source: "work_model"
+      });
+      sendJson(res, 200, {
+        ...result,
+        creditRecord,
+        credits: buildUserCreditSummary(session.user.id)
+      });
     } catch (error) {
       sendJson(res, error.status || 400, {
         error: "UserModelDownloadSourceFailed",
         message: error.message || "Failed to prepare model download.",
+        details: error.details || null
+      });
+    }
+    return;
+  }
+
+  const generatedTaskDownloadSourceMatch = requestUrl.pathname.match(/^\/api\/generated-tasks\/([^/]+)\/download-source$/);
+  if (generatedTaskDownloadSourceMatch && req.method === "GET") {
+    try {
+      const session = assertAuthenticated(req);
+      assertUserHasCreditsForAction(session.user.id, "download");
+      const result = resolveGeneratedTaskDownloadSource(session.user.id, generatedTaskDownloadSourceMatch[1], requestUrl);
+      const creditRecord = consumeUserCreditsForAction(session.user.id, "download", {
+        taskId: generatedTaskDownloadSourceMatch[1],
+        source: "generated_task"
+      });
+      sendJson(res, 200, {
+        ...result,
+        creditRecord,
+        credits: buildUserCreditSummary(session.user.id)
+      });
+    } catch (error) {
+      sendJson(res, error.status || 400, {
+        error: "GeneratedTaskDownloadSourceFailed",
+        message: error.message || "Failed to prepare generated model download.",
         details: error.details || null
       });
     }
@@ -597,6 +649,32 @@ async function handleApi(req, res, requestUrl) {
       sendJson(res, error.status || 400, {
         error: "CreditAdjustFailed",
         message: error.message || "积分调整失败。"
+      });
+      return;
+    }
+  }
+
+  if (req.method === "POST" && requestUrl.pathname === "/api/credits/consume-download") {
+    try {
+      const session = assertAuthenticated(req);
+      const request = toWebRequest(req, requestUrl);
+      const payload = await request.json();
+      const creditRecord = consumeUserCreditsForAction(session.user.id, "download", {
+        source: normalizeText(payload?.source || "manual_download"),
+        taskId: normalizeText(payload?.taskId || ""),
+        modelId: normalizeText(payload?.modelId || "")
+      });
+      sendJson(res, 200, {
+        ok: true,
+        creditRecord,
+        credits: buildUserCreditSummary(session.user.id)
+      });
+      return;
+    } catch (error) {
+      sendJson(res, error.status || 400, {
+        error: "CreditConsumeFailed",
+        message: error.message || "积分扣除失败。",
+        details: error.details || null
       });
       return;
     }
@@ -712,8 +790,7 @@ async function handleApi(req, res, requestUrl) {
       const requestedProvider = normalizeProvider(form.get("provider"));
       const provider = providers[requestedProvider]?.enabled ? requestedProvider : generatorSettings.provider;
       const modelVersion = resolveModelVersion(provider, form.get("modelVersion"), providers);
-      consumedCreditRecord = consumeUserCredits(session.user.id, CREDIT_COSTS.generate, "AI鐢熸垚妯″瀷", {
-        action: "generate",
+      consumedCreditRecord = consumeUserCreditsForAction(session.user.id, "generate", {
         provider,
         mode: normalizeText(form.get("mode") || "text"),
         prompt: normalizeText(form.get("prompt") || "")
@@ -767,8 +844,7 @@ async function handleApi(req, res, requestUrl) {
       const form = await request.formData();
       const provider = normalizeProvider(form.get("provider"));
       const operation = normalizeOptimizationOperation(form.get("operation"));
-      consumedCreditRecord = consumeUserCredits(session.user.id, CREDIT_COSTS.optimize, "AI妯″瀷浼樺寲", {
-        action: "optimize",
+      consumedCreditRecord = consumeUserCreditsForAction(session.user.id, "optimize", {
         provider,
         operation
       });
@@ -1857,21 +1933,16 @@ function buildWorkMeResponse(userId) {
     throwHttpError(404, "用户不存在。");
   }
 
-  const creditStore = readUserCreditsFile();
-  const balance = getUserCreditBalance(user.id, creditStore);
+  const creditSummary = buildUserCreditSummary(user.id);
   const storage = getUserModelStorageSummary(user.id, user.modelStorageQuotaBytes);
   return {
     ok: true,
     user: {
       ...user,
-      credits: balance,
+      credits: creditSummary.balance,
       storage
     },
-    credits: {
-      balance,
-      costs: CREDIT_COSTS,
-      records: getCreditRecordsForUser(user.id, creditStore)
-    },
+    credits: creditSummary,
     storage
   };
 }
@@ -2131,6 +2202,38 @@ function buildRemoteModelDownloadSource(model, url) {
 function buildUserModelDownloadFileName(model) {
   const file = model.files.find((item) => item.storedName === model.entryFile) || model.files[0];
   return sanitizeUploadFileName(file?.originalName || model.entryFile || `${model.name || "model"}.${String(model.format || "glb").toLowerCase()}`);
+}
+
+function resolveGeneratedTaskDownloadSource(userId, taskId, requestUrl) {
+  const task = generatedTaskRecords.get(normalizeText(taskId));
+  if (!task || task.userId !== userId) {
+    throwHttpError(404, "生成模型记录不存在。");
+  }
+
+  const format = normalizeText(requestUrl.searchParams.get("format") || "").toLowerCase();
+  const urls = collectRemoteModelUrlsFromTask(task);
+  const requested = format ? urls[format] || urls[format.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] : "";
+  const url = requested || urls.model || urls.glb || task.preferredModelUrl || "";
+  if (!isHttpUrl(url) && !String(url || "").startsWith("/")) {
+    throwHttpError(404, "当前任务还没有可下载的模型文件。");
+  }
+
+  return {
+    ok: true,
+    source: isHttpUrl(url) ? "remote" : "local",
+    url,
+    fileName: buildGeneratedTaskDownloadFileName(task, format),
+    strategy: isHttpUrl(url) ? "remote-first" : "local-first"
+  };
+}
+
+function buildGeneratedTaskDownloadFileName(task, format = "") {
+  const extension = normalizeText(format || inferModelExtensionFromTask(task, task.preferredModelUrl || "") || "glb")
+    .replace(/[^a-z0-9]/gi, "")
+    .toLowerCase() || "glb";
+  const baseName = sanitizeUploadFileName(getGeneratedTaskPrompt(task) || task.taskId || "generated-model")
+    .replace(/\.[a-z0-9]+$/i, "");
+  return `${baseName || "generated-model"}.${extension}`;
 }
 
 function selectRemoteModelUrl(model, format = "") {
@@ -2942,6 +3045,45 @@ function getCreditRecordsForUser(userId, store = readUserCreditsFile()) {
     });
 }
 
+function buildUserCreditSummary(userId, store = readUserCreditsFile()) {
+  return {
+    balance: getUserCreditBalance(userId, store),
+    costs: CREDIT_COSTS,
+    records: getCreditRecordsForUser(userId, store)
+  };
+}
+
+function consumeUserCreditsForAction(userId, action, meta = {}) {
+  const rule = CREDIT_ACTIONS[action];
+  if (!rule) {
+    throwHttpError(400, "未知积分扣除场景。");
+  }
+
+  const cost = Number(CREDIT_COSTS[rule.costKey] || 0);
+  return consumeUserCredits(userId, cost, rule.title, {
+    action,
+    ...meta
+  }, rule.type);
+}
+
+function assertUserHasCreditsForAction(userId, action) {
+  const rule = CREDIT_ACTIONS[action];
+  if (!rule) {
+    throwHttpError(400, "未知积分扣除场景。");
+  }
+
+  const amount = Number(CREDIT_COSTS[rule.costKey] || 0);
+  if (!amount) {
+    return true;
+  }
+
+  const balance = getUserCreditBalance(userId);
+  if (balance < amount) {
+    throwHttpError(402, `积分不足，当前余额 ${balance}，本次需要 ${amount}。`);
+  }
+  return true;
+}
+
 function appendCreditRecord(store, { userId, amount, type, title, note, operatorId = "", meta = {} }) {
   const balance = getUserCreditBalance(userId, store) + amount;
   store.balances[userId] = balance;
@@ -2962,7 +3104,7 @@ function appendCreditRecord(store, { userId, amount, type, title, note, operator
   return record;
 }
 
-function consumeUserCredits(userId, cost, title, meta = {}) {
+function consumeUserCredits(userId, cost, title, meta = {}, type = "consume") {
   const amount = Number(cost || 0);
   if (!amount) {
     return null;
@@ -2977,9 +3119,9 @@ function consumeUserCredits(userId, cost, title, meta = {}) {
   const record = appendCreditRecord(store, {
     userId,
     amount: -amount,
-    type: "consume",
+    type,
     title,
-    note: `${title}娑堣€?${amount} 绉垎`,
+    note: `${title}消耗 ${amount} 积分`,
     meta
   });
   writeUserCreditsFile(store);

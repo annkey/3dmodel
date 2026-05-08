@@ -1062,6 +1062,20 @@ function getAuthHeaders() {
   return authSession?.token ? { Authorization: `Bearer ${authSession.token}` } : {};
 }
 
+function updateAuthCreditsFromResponse(data) {
+  if (!data?.credits || !authSession?.user) {
+    return;
+  }
+
+  setAuthSession({
+    ...authSession,
+    user: {
+      ...authSession.user,
+      credits: data.credits.balance
+    }
+  });
+}
+
 function getUserInitial(name) {
   const text = String(name || "U").trim();
   return (text[0] || "U").toUpperCase();
@@ -1678,19 +1692,38 @@ async function playOptimizationResult() {
   }
 }
 
-function downloadOptimizationResult() {
+async function downloadOptimizationResult() {
+  if (!requireLogin(() => {
+    void downloadOptimizationResult();
+  }, "请先登录后再下载模型。")) {
+    return;
+  }
+
   if (!activeOptimizationPlayable?.url) {
     setStatus("当前优化任务还没有可下载的模型");
     return;
   }
 
-  const extension = getExtension(activeOptimizationPlayable.format || inferFormatFromUrl(activeOptimizationPlayable.url) || "glb") || "glb";
-  const safeName = sanitizeDownloadName(`${modelName.textContent || "current-model"}-optimized`);
-  const link = document.createElement("a");
-  link.href = buildAssetProxyUrl(activeOptimizationPlayable.url);
-  link.download = `${safeName}.${extension}`;
-  link.click();
-  setStatus("优化模型下载已开始");
+  try {
+    const data = await fetchJson("/api/credits/consume-download", {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: "optimization_result",
+        taskId: activeOptimizationTask?.id || ""
+      })
+    });
+    updateAuthCreditsFromResponse(data);
+    const extension = getExtension(activeOptimizationPlayable.format || inferFormatFromUrl(activeOptimizationPlayable.url) || "glb") || "glb";
+    const safeName = sanitizeDownloadName(`${modelName.textContent || "current-model"}-optimized`);
+    const link = document.createElement("a");
+    link.href = buildAssetProxyUrl(activeOptimizationPlayable.url);
+    link.download = `${safeName}.${extension}`;
+    link.click();
+    setStatus("优化模型下载已开始");
+  } catch (error) {
+    setStatus(error.message || "优化模型下载失败");
+  }
 }
 
 function getGeneratorDefaults(provider) {
@@ -2140,6 +2173,12 @@ async function playGeneratedTask(taskId) {
 }
 
 async function downloadGeneratedTask(taskId) {
+  if (!requireLogin(() => {
+    void downloadGeneratedTask(taskId);
+  }, "请先登录后再下载模型。")) {
+    return;
+  }
+
   const task = generatedTasks.find((item) => item.id === taskId);
   if (!task) {
     setStatus("没有找到要下载的模型");
@@ -2154,37 +2193,43 @@ async function downloadGeneratedTask(taskId) {
 
   const extension = getExtension(playable.format || inferFormatFromUrl(playable.url) || "glb") || "glb";
   const safeName = sanitizeDownloadName(task.prompt || task.taskId || "generated-model");
-  const source = await resolveGeneratedTaskDownloadSource(task, extension);
-  const link = document.createElement("a");
-  link.href = source.url;
-  link.download = source.fileName || `${safeName}.${extension}`;
-  link.click();
-  setStatus("模型下载已开始");
+  try {
+    const source = await resolveGeneratedTaskDownloadSource(task, extension);
+    const link = document.createElement("a");
+    link.href = source.url;
+    link.download = source.fileName || `${safeName}.${extension}`;
+    link.click();
+    setStatus("模型下载已开始");
+  } catch (error) {
+    setStatus(error.message || "模型下载失败");
+  }
 }
 
 async function resolveGeneratedTaskDownloadSource(task, extension) {
+  if (!authSession?.token) {
+    throw new Error("请先登录后再下载模型。");
+  }
+
   const model = task?.persistedModel;
   if (model?.id && authSession?.token) {
-    try {
-      const data = await fetchJson(`/api/work/models/${encodeURIComponent(model.id)}/download-source?format=${encodeURIComponent(extension || model.format || "")}`, {
-        headers: getAuthHeaders()
-      });
-      if (data?.url) {
-        return data.source === "remote"
-          ? data
-          : { ...data, url: buildAssetProxyUrl(data.url) };
-      }
-    } catch (error) {
-      console.warn("Generated task download source resolve failed", error);
+    const data = await fetchJson(`/api/work/models/${encodeURIComponent(model.id)}/download-source?format=${encodeURIComponent(extension || model.format || "")}`, {
+      headers: getAuthHeaders()
+    });
+    updateAuthCreditsFromResponse(data);
+    if (data?.url) {
+      return data.source === "remote"
+        ? data
+        : { ...data, url: buildAssetProxyUrl(data.url) };
     }
   }
 
-  const playable = resolvePlayableModel(task);
-  return {
-    source: "fallback",
-    url: buildAssetProxyUrl(playable?.url || ""),
-    fileName: `${sanitizeDownloadName(task.prompt || task.taskId || "generated-model")}.${extension || "glb"}`
-  };
+  const data = await fetchJson(`/api/generated-tasks/${encodeURIComponent(task.taskId || task.id)}/download-source?format=${encodeURIComponent(extension || "")}`, {
+    headers: getAuthHeaders()
+  });
+  updateAuthCreditsFromResponse(data);
+  return data.source === "remote"
+    ? data
+    : { ...data, url: buildAssetProxyUrl(data.url) };
 }
 
 function deleteGeneratedTask(taskId) {
