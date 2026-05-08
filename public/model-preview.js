@@ -122,6 +122,7 @@ const userMenuPanel = document.getElementById("user-menu-panel");
 const userAvatar = document.getElementById("user-avatar");
 const userDisplayName = document.getElementById("user-display-name");
 const userRoleText = document.getElementById("user-role-text");
+const userCreditText = document.getElementById("user-credit-text");
 const adminEntryLink = document.getElementById("admin-entry-link");
 const logoutButton = document.getElementById("logout-button");
 const generatorForm = document.getElementById("generator-form");
@@ -175,6 +176,10 @@ const modelPlaybackLoadingFilename = document.getElementById("model-playback-loa
 const modelPlaybackLoadingFill = document.getElementById("model-playback-loading-fill");
 const modelPlaybackLoadingPercent = document.getElementById("model-playback-loading-percent");
 const localModelPickerTriggers = Array.from(document.querySelectorAll('[for="model-files"]'));
+const CREDIT_COST_FALLBACK = {
+  generate: 10,
+  optimize: 5
+};
 
 interactionModeButton.id = "toggle-interaction-mode";
 interactionModeButton.type = "button";
@@ -934,21 +939,56 @@ function restoreAuthSession() {
 }
 
 async function refreshAuthSession() {
-  if (!authSession?.token) {
+  const refreshingToken = authSession?.token || "";
+  if (!refreshingToken) {
     return;
   }
 
   try {
     const data = await fetchJson("/api/auth/session", {
-      headers: getAuthHeaders()
+      headers: getAuthHeadersForToken(refreshingToken)
     });
+    if (authSession?.token !== refreshingToken) {
+      return;
+    }
     setAuthSession({
       token: data.token || authSession.token,
       expiresAt: data.expiresAt,
       user: data.user
     });
   } catch {
-    clearAuthSession();
+    if (authSession?.token === refreshingToken) {
+      clearAuthSession();
+    }
+  }
+}
+
+async function ensureAuthSession(message = "请先登录后再继续操作。") {
+  if (!requireLogin(null, message)) {
+    return false;
+  }
+
+  const authToken = authSession?.token || "";
+  try {
+    const data = await fetchJson("/api/auth/session", {
+      headers: getAuthHeadersForToken(authToken)
+    });
+    setAuthSession({
+      token: data.token || authSession.token,
+      expiresAt: data.expiresAt,
+      user: data.user
+    });
+    return data.token || authToken;
+  } catch (error) {
+    if (error.status === 401 || error.status === 403) {
+      clearAuthSession();
+      showLoginFeedback("登录状态已失效，请重新登录。", "info");
+      openModal(loginModal);
+      window.setTimeout(() => loginUsernameInput?.focus(), 0);
+      return false;
+    }
+
+    throw error;
   }
 }
 
@@ -1055,11 +1095,18 @@ function renderAuthState() {
   userAvatar.textContent = getUserInitial(displayName);
   userDisplayName.textContent = displayName;
   userRoleText.textContent = user.roleText || (user.role === "admin" ? "管理员" : "普通用户");
+  if (userCreditText) {
+    userCreditText.textContent = `积分 ${formatUserCredits(user.credits)}`;
+  }
   adminEntryLink?.classList.toggle("hidden", user.role !== "admin");
 }
 
 function getAuthHeaders() {
   return authSession?.token ? { Authorization: `Bearer ${authSession.token}` } : {};
+}
+
+function getAuthHeadersForToken(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function updateAuthCreditsFromResponse(data) {
@@ -1072,6 +1119,88 @@ function updateAuthCreditsFromResponse(data) {
     user: {
       ...authSession.user,
       credits: data.credits.balance
+    }
+  });
+}
+
+function formatUserCredits(value) {
+  const credits = Number(value || 0);
+  return Number.isFinite(credits) ? formatNumber(credits) : "0";
+}
+
+function getCreditCost(action) {
+  return Number(apiConfig?.creditCosts?.[action]
+    || authSession?.user?.creditCosts?.[action]
+    || CREDIT_COST_FALLBACK[action]
+    || 0);
+}
+
+function hasEnoughCreditsForAction(action) {
+  const cost = getCreditCost(action);
+  return Number(authSession?.user?.credits || 0) >= cost;
+}
+
+function showInsufficientCredits(messageTarget = null) {
+  const message = "您当前积分不足，请充值！";
+  setStatus(message);
+  setFormNote(messageTarget, message, "error");
+  return message;
+}
+
+function setFormNote(element, message, type = "info") {
+  if (!element) {
+    return;
+  }
+
+  element.textContent = message || "";
+  element.classList.toggle("hidden", !message);
+  element.classList.toggle("form-note-error", Boolean(message) && type === "error");
+  element.setAttribute("aria-hidden", message ? "false" : "true");
+}
+
+function getCreditErrorMessage(error) {
+  const text = String(error?.message || "");
+  const detailText = JSON.stringify(error?.details || {});
+  return text.includes("积分不足") || detailText.includes("积分不足")
+    ? "您当前积分不足，请充值！"
+    : "";
+}
+
+function isAuthExpiredError(error) {
+  if (error?.status !== 401 && error?.status !== 403) {
+    return false;
+  }
+
+  const wrappedError = String(error?.details?.error || "");
+  return wrappedError !== "ModelOptimizeFailed";
+}
+
+function getOptimizerErrorMessage(error) {
+  if (getCreditErrorMessage(error)) {
+    return getCreditErrorMessage(error);
+  }
+
+  const wrappedError = String(error?.details?.error || "");
+  const text = String(error?.message || "");
+  if (wrappedError === "ModelOptimizeFailed" && text.includes("登录")) {
+    return "AI模型优化服务当前不可用，请先在后端配置可用的 Meshy 或 Tripo3D 优化接口。";
+  }
+
+  return text || "模型优化提交失败";
+}
+
+function consumeAuthCreditsLocally(action) {
+  if (!authSession?.user) {
+    return;
+  }
+
+  const cost = getCreditCost(action);
+  const balance = Number(authSession.user.credits || 0);
+  setAuthSession({
+    ...authSession,
+    user: {
+      ...authSession.user,
+      credits: Math.max(0, balance - cost)
     }
   });
 }
@@ -1218,7 +1347,7 @@ function syncGeneratorFormForProvider() {
   if (generatorConfigSummary) {
     generatorConfigSummary.textContent = "";
   }
-  generatorFormNote.textContent = "";
+  setFormNote(generatorFormNote, "");
 }
 
 function getActiveOptimizerConfig() {
@@ -1336,7 +1465,7 @@ function syncOptimizerFormState() {
     optimizerCurrentModel.classList.toggle("hidden", target.ready);
   }
 
-  optimizerFormNote.textContent = "";
+  setFormNote(optimizerFormNote, "");
   optimizerSubmitButton.textContent = operation === "split" ? "开始优化当前模型" : "开始优化当前模型";
 
   if (!target.ready) {
@@ -1374,7 +1503,8 @@ function updateFileInputText(input, output) {
 }
 
 async function handleGeneratorSubmit() {
-  if (!requireLogin(null, "请先登录后再使用 AI 生成模型。")) {
+  const authToken = await ensureAuthSession("请先登录后再使用 AI 生成模型。");
+  if (!authToken) {
     return;
   }
 
@@ -1398,6 +1528,11 @@ async function handleGeneratorSubmit() {
       generatorImageInput.focus();
       return;
     }
+  }
+
+  if (!hasEnoughCreditsForAction("generate")) {
+    showInsufficientCredits(generatorFormNote);
+    return;
   }
 
   generatorSubmitButton.disabled = true;
@@ -1428,11 +1563,17 @@ async function handleGeneratorSubmit() {
       imageFile,
       modelVersion: activeConfig.modelVersion,
       textureQuality: generatorTextureQualitySelect.value,
-      geometryQuality: generatorGeometryQualitySelect.value
+      geometryQuality: generatorGeometryQualitySelect.value,
+      authToken
     });
 
     if (!result.taskId) {
       throw createDetailedError(`${activeConfig.providerName} 没有返回任务 ID。`, result);
+    }
+
+    updateAuthCreditsFromResponse(result);
+    if (!result?.credits) {
+      consumeAuthCreditsLocally("generate");
     }
 
     const createdTask = upsertGeneratedTask({
@@ -1465,9 +1606,19 @@ async function handleGeneratorSubmit() {
     setStatus("已提交生成请求，正在等待模型生成");
     await pollGeneratedTask(createdTask.id, provider);
   } catch (error) {
+    if (isAuthExpiredError(error)) {
+      clearTaskProgressOverlay();
+      clearAuthSession();
+      showLoginFeedback("登录状态已失效，请重新登录。", "info");
+      openModal(loginModal);
+      window.setTimeout(() => loginUsernameInput?.focus(), 0);
+      return;
+    }
+
+    const message = getCreditErrorMessage(error) || error.message || "模型生成提交失败";
     clearTaskProgressOverlay();
-    setStatus(error.message || "模型生成提交失败");
-    generatorFormNote.textContent = error.message || "模型生成提交失败";
+    setStatus(message);
+    setFormNote(generatorFormNote, message, "error");
     openModal(generatorModal);
   } finally {
     generatorSubmitButton.disabled = false;
@@ -1476,7 +1627,8 @@ async function handleGeneratorSubmit() {
 }
 
 async function handleOptimizerSubmit() {
-  if (!requireLogin(null, "请先登录后再使用 AI 模型优化。")) {
+  const authToken = await ensureAuthSession("请先登录后再使用 AI 模型优化。");
+  if (!authToken) {
     return;
   }
 
@@ -1502,6 +1654,11 @@ async function handleOptimizerSubmit() {
     }
   }
 
+  if (!hasEnoughCreditsForAction("optimize")) {
+    showInsufficientCredits(optimizerFormNote);
+    return;
+  }
+
   optimizerSubmitButton.disabled = true;
   optimizerSubmitButton.textContent = "正在提交...";
   renderOptimizerTaskState({
@@ -1518,11 +1675,17 @@ async function handleOptimizerSubmit() {
       provider,
       operation,
       target,
-      modelVersion: activeConfig.modelVersion
+      modelVersion: activeConfig.modelVersion,
+      authToken
     });
 
     if (!result.taskId) {
       throw createDetailedError("优化任务没有返回任务 ID。", result);
+    }
+
+    updateAuthCreditsFromResponse(result);
+    if (!result?.credits) {
+      consumeAuthCreditsLocally("optimize");
     }
 
     activeOptimizationTask = {
@@ -1544,22 +1707,31 @@ async function handleOptimizerSubmit() {
 
     await pollOptimizerTask(result.taskId, activeOptimizationTask.provider, activeOptimizationTask.operation);
   } catch (error) {
+    if (isAuthExpiredError(error)) {
+      clearAuthSession();
+      showLoginFeedback("登录状态已失效，请重新登录。", "info");
+      openModal(loginModal);
+      window.setTimeout(() => loginUsernameInput?.focus(), 0);
+      return;
+    }
+
+    const message = getOptimizerErrorMessage(error);
     renderOptimizerTaskState({
       title: "优化提交失败",
       status: "失败",
-      meta: error.message || "模型优化提交失败",
+      meta: message,
       progress: 0,
       finalized: true
     });
-    optimizerFormNote.textContent = error.message || "模型优化提交失败";
-    setStatus(error.message || "模型优化提交失败");
+    setFormNote(optimizerFormNote, message, "error");
+    setStatus(message);
   } finally {
     optimizerSubmitButton.disabled = false;
     optimizerSubmitButton.textContent = "开始优化当前模型";
   }
 }
 
-async function submitOptimizerTask({ provider, operation, target, modelVersion }) {
+async function submitOptimizerTask({ provider, operation, target, modelVersion, authToken }) {
   const payload = new FormData();
   payload.append("provider", provider);
   payload.append("operation", operation);
@@ -1590,7 +1762,7 @@ async function submitOptimizerTask({ provider, operation, target, modelVersion }
 
   return fetchJson("/api/model-optimize", {
     method: "POST",
-    headers: getAuthHeaders(),
+    headers: getAuthHeadersForToken(authToken || authSession?.token),
     body: payload
   });
 }
@@ -1749,7 +1921,8 @@ async function submitGeneratorTask({
   imageFile,
   modelVersion,
   textureQuality,
-  geometryQuality
+  geometryQuality,
+  authToken
 }) {
   const defaults = getGeneratorDefaults(provider);
   const payload = new FormData();
@@ -1768,7 +1941,7 @@ async function submitGeneratorTask({
 
   return fetchJson("/api/generate", {
     method: "POST",
-    headers: getAuthHeaders(),
+    headers: getAuthHeadersForToken(authToken || authSession?.token),
     body: payload
   });
 }
@@ -4381,7 +4554,8 @@ function handleViewerPointerMove(event) {
 }
 
 function handleViewerPointerUp(event) {
-  if (activePointerManipulation?.pointerId !== null
+  if (activePointerManipulation
+    && activePointerManipulation.pointerId !== null
     && event.pointerId !== undefined
     && activePointerManipulation.pointerId !== event.pointerId) {
     return;
@@ -5174,7 +5348,9 @@ async function fetchJson(url, options) {
   const data = text ? JSON.parse(text) : {};
 
   if (!response.ok) {
-    throw createDetailedError(normalizeRequestErrorMessage(data.message || "请求失败", data, url), data);
+    const error = createDetailedError(normalizeRequestErrorMessage(data.message || "请求失败", data, url), data);
+    error.status = response.status;
+    throw error;
   }
 
   return data;

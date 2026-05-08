@@ -14,6 +14,7 @@ const workUserMenuPanel = document.getElementById("work-user-menu-panel");
 const workUserAvatar = document.getElementById("work-user-avatar");
 const workUserDisplayName = document.getElementById("work-user-display-name");
 const workUserRoleText = document.getElementById("work-user-role-text");
+const workUserCreditText = document.getElementById("work-user-credit-text");
 const workAdminEntryLink = document.getElementById("work-admin-entry-link");
 const workLogoutButton = document.getElementById("work-logout-button");
 const modelFilters = document.getElementById("model-filters");
@@ -1155,12 +1156,20 @@ function renderUserMenu(user) {
   if (workUserRoleText) {
     workUserRoleText.textContent = user?.roleText || (user?.role === "admin" ? "管理员" : "普通用户");
   }
+  if (workUserCreditText) {
+    workUserCreditText.textContent = `积分 ${formatNumber(user?.credits || credits.balance || 0)}`;
+  }
   workAdminEntryLink?.classList.toggle("hidden", user?.role !== "admin");
 }
 
 function getUserInitial(name) {
   const text = String(name || "U").trim();
   return text ? text.slice(0, 1).toUpperCase() : "U";
+}
+
+function formatNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? new Intl.NumberFormat("zh-CN").format(number) : "0";
 }
 
 function parseStoredJson(key, fallback) {

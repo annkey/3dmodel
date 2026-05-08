@@ -862,7 +862,7 @@ async function handleApi(req, res, requestUrl) {
           });
           return;
         } catch (error) {
-          if (error.status && error.status !== 404 && error.status !== 501) {
+          if (error.status && ![401, 403, 404, 501].includes(error.status)) {
             throw error;
           }
         }
@@ -950,7 +950,7 @@ async function handleApi(req, res, requestUrl) {
           });
           return;
         } catch (error) {
-          if (error.status && error.status !== 404 && error.status !== 501) {
+          if (error.status && ![401, 403, 404, 501].includes(error.status)) {
             throw error;
           }
         }
@@ -2955,6 +2955,7 @@ function toPublicAdminUser(user) {
     displayName: user.displayName,
     role: user.role,
     roleText: user.role === "admin" ? "管理员" : "普通用户",
+    credits: getUserCreditBalance(user.id),
     disabled: Boolean(user.disabled),
     statusText: user.disabled ? "已禁用" : "已启用",
     hasPassword: Boolean(user.password?.hash),
@@ -4474,6 +4475,7 @@ function buildLocalGeneratorConfigResponse() {
     proxied: false,
     providers,
     generatorSettings,
+    creditCosts: CREDIT_COSTS,
     optimization
   };
 }

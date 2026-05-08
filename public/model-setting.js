@@ -65,6 +65,7 @@ const adminUserMenuPanel = document.getElementById("admin-user-menu-panel");
 const adminUserAvatar = document.querySelector(".topbar-user .user-avatar");
 const adminUserName = document.querySelector(".topbar-user .user-name");
 const adminUserRole = document.getElementById("admin-user-role");
+const adminUserCreditText = document.getElementById("admin-user-credit-text");
 const adminLogoutButton = document.getElementById("admin-logout");
 const AUTH_STORAGE_KEY = "kmax-model-preview-auth";
 
@@ -937,6 +938,9 @@ function renderAdminUser() {
   if (adminUserRole) {
     adminUserRole.textContent = currentAdminUser?.roleText || "管理员";
   }
+  if (adminUserCreditText) {
+    adminUserCreditText.textContent = `积分 ${formatNumber(currentAdminUser?.credits || 0)}`;
+  }
 }
 
 function normalizeDownloadItems(task) {
@@ -1054,6 +1058,11 @@ function formatRole(role) {
 function getUserInitial(name) {
   const value = String(name || "").trim();
   return value ? value.slice(0, 1).toUpperCase() : "A";
+}
+
+function formatNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? new Intl.NumberFormat("zh-CN").format(number) : "0";
 }
 
 function formatTime(value) {
