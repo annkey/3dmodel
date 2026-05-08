@@ -5,11 +5,13 @@ import {
   SCENE_FEATURES,
   SITE_CONFIG
 } from "./app-config.js";
+import { applySiteBranding } from "./site-brand.js";
 
 const app = document.getElementById("app");
 
 renderPage();
 setupMotion();
+void applySiteBranding();
 
 function renderPage() {
   document.title = `${SITE_CONFIG.productName} - 官网门户`;
@@ -20,7 +22,7 @@ function renderPage() {
     <header class="navbar">
       <div class="container navbar-inner">
         <a class="brand" href="/">
-          <span class="brand-mark gradient-text">${SITE_CONFIG.brand}</span>
+          <img class="brand-logo" src="/assets/kmax-logo.png" alt="${SITE_CONFIG.brand}" />
           <span class="brand-tagline">${SITE_CONFIG.navTagline}</span>
         </a>
         <div class="nav-actions">
@@ -100,9 +102,7 @@ function renderPage() {
     <footer class="footer">
       <div class="container footer-inner">
         <div class="footer-brand">
-          <div class="footer-mark">
-            <strong class="gradient-text">${SITE_CONFIG.brand}</strong>
-          </div>
+          <img src="/assets/kmax-logo.png" alt="${SITE_CONFIG.brand}" />
         </div>
         <div class="footer-copy">${SITE_CONFIG.footerText}</div>
       </div>

@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/assets/kmax-logo.png" />
+    <link rel="shortcut icon" type="image/png" href="/assets/kmax-logo.png" />
     <title>KMAX 管理后台</title>
     <link rel="stylesheet" href="/model-setting.css" />
   </head>
@@ -10,7 +12,8 @@
     <div class="admin-shell">
       <header class="admin-topbar">
         <a class="brand" href="/">
-          <span>KMAX 管理后台</span>
+          <img class="brand-logo" src="/assets/kmax-logo.png" alt="KMAX" />
+          <span>管理后台</span>
         </a>
         <div class="topbar-user">
           <button id="admin-user-menu-trigger" class="user-menu-trigger" type="button" aria-label="用户信息">
@@ -93,7 +96,8 @@
           </section>
 
           <section id="settings-view" class="admin-view">
-            <div class="content-panel settings-panel">
+            <div class="settings-grid">
+              <div class="content-panel settings-panel">
               <div class="section-title">
                 <span>Generator Config</span>
                 <h2>公共生成配置</h2>
@@ -120,6 +124,48 @@
 
               <div id="settings-feedback" class="feedback hidden" aria-live="polite"></div>
             </div>
+
+              <div class="content-panel settings-panel">
+              <div class="section-title">
+                <span>Site Config</span>
+                <h2>平台品牌与 TDK</h2>
+                <p>配置平台官网、模型播放器、用户中心和管理后台的 LOGO、浏览器标题与搜索展示信息。</p>
+              </div>
+
+              <form id="site-settings-form" class="settings-form">
+                <div class="logo-upload-row">
+                  <div class="logo-preview-box">
+                    <img id="site-logo-preview" src="/assets/kmax-logo.png" alt="平台 LOGO 预览" />
+                  </div>
+                  <label class="form-field file-field">
+                    <span>平台 LOGO</span>
+                    <span class="file-picker">
+                      <input id="site-logo-file" name="logo" type="file" accept="image/png,image/jpeg,image/webp" />
+                      <span class="file-button">选择文件</span>
+                      <span id="site-logo-file-text" class="file-name">未选择任何文件</span>
+                    </span>
+                    <small>支持 PNG、JPG、WebP，保存后用于页面顶部和底部 LOGO。</small>
+                  </label>
+                </div>
+
+                <label class="form-field">
+                  <span>Keywords（关键词）</span>
+                  <input id="site-keywords" name="keywords" maxlength="240" autocomplete="off" />
+                </label>
+
+                <label class="form-field">
+                  <span>Description（页面描述）</span>
+                  <textarea id="site-description" name="description" maxlength="360" rows="4"></textarea>
+                </label>
+
+                <div class="form-actions">
+                  <button id="save-site-settings" class="primary-btn" type="submit">保存品牌配置</button>
+                </div>
+              </form>
+
+              <div id="site-settings-feedback" class="feedback hidden" aria-live="polite"></div>
+              </div>
+            </div>
           </section>
 
           <section id="assets-view" class="admin-view hidden">
@@ -142,6 +188,7 @@
                   </thead>
                   <tbody id="asset-table-body"></tbody>
                 </table>
+                <div id="asset-pagination" class="pagination hidden" aria-label="模型列表分页"></div>
               </div>
               <p id="asset-empty" class="empty-state hidden">暂无模型生成任务。打开模型播放器提交生成任务后，这里会显示资源列表。</p>
             </div>
@@ -167,6 +214,7 @@
                   </thead>
                   <tbody id="user-table-body"></tbody>
                 </table>
+                <div id="user-pagination" class="pagination hidden" aria-label="用户列表分页"></div>
               </div>
               <p id="user-empty" class="empty-state hidden">暂无后台用户。</p>
             </div>
@@ -190,6 +238,7 @@
                   </thead>
                   <tbody id="credit-table-body"></tbody>
                 </table>
+                <div id="credit-pagination" class="pagination hidden" aria-label="积分记录分页"></div>
               </div>
               <p id="credit-empty" class="empty-state hidden">暂无积分记录。</p>
             </div>

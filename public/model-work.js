@@ -1,3 +1,5 @@
+import { applySiteBranding } from "/site-brand.js";
+
 const AUTH_STORAGE_KEY = "kmax-model-preview-auth";
 const GENERATED_TASK_STORAGE_KEY = "model-preview-generated-tasks";
 const navItems = Array.from(document.querySelectorAll("[data-view]"));
@@ -20,6 +22,7 @@ const workLogoutButton = document.getElementById("work-logout-button");
 const modelFilters = document.getElementById("model-filters");
 const sourceFilter = document.getElementById("source-filter");
 const modelList = document.getElementById("model-list");
+const modelPagination = document.getElementById("model-pagination");
 const modelEmpty = document.getElementById("model-empty");
 const modelFeedback = document.getElementById("model-feedback");
 const storageText = document.getElementById("storage-text");
@@ -59,6 +62,7 @@ const generateCost = document.getElementById("generate-cost");
 const optimizeCost = document.getElementById("optimize-cost");
 const creditRecordSearch = document.getElementById("credit-record-search");
 const creditRecords = document.getElementById("credit-records");
+const creditPagination = document.getElementById("credit-pagination");
 const creditEmpty = document.getElementById("credit-empty");
 const profileForm = document.getElementById("profile-form");
 const profileUsername = document.getElementById("profile-username");
@@ -84,6 +88,9 @@ const viewMeta = {
   }
 };
 
+const MODEL_PAGE_SIZE = 20;
+const CREDIT_PAGE_SIZE = 20;
+
 let authSession = null;
 let account = null;
 let credits = { balance: 0, costs: {}, records: [] };
@@ -95,8 +102,11 @@ const modelCoverObjectUrls = new Map();
 let modelShareField = null;
 let currentUploadController = null;
 let uploadCancelledByUser = false;
+let modelPage = 1;
+let creditPage = 1;
 
 bootstrap();
+void applySiteBranding();
 
 async function bootstrap() {
   authSession = parseStoredJson(AUTH_STORAGE_KEY, null);
@@ -119,7 +129,10 @@ function bindEvents() {
   navItems.forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view || "models"));
   });
-  sourceFilter.addEventListener("change", renderModels);
+  sourceFilter.addEventListener("change", () => {
+    modelPage = 1;
+    renderModels();
+  });
   openUploadDialogButton?.addEventListener("click", openUploadDialog);
   closeUploadDialogButton?.addEventListener("click", closeUploadDialog);
   cancelUploadDialogButton?.addEventListener("click", closeUploadDialog);
@@ -165,7 +178,26 @@ function bindEvents() {
     event.preventDefault();
     void savePassword();
   });
-  creditRecordSearch?.addEventListener("input", renderCredits);
+  creditRecordSearch?.addEventListener("input", () => {
+    creditPage = 1;
+    renderCredits();
+  });
+  creditPagination?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-credit-page]");
+    if (!button || button.disabled) {
+      return;
+    }
+    creditPage = Number(button.dataset.creditPage || 1);
+    renderCredits();
+  });
+  modelPagination?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-model-page]");
+    if (!button || button.disabled) {
+      return;
+    }
+    modelPage = Number(button.dataset.modelPage || 1);
+    renderModels();
+  });
   modelList.addEventListener("click", (event) => {
     const menuButton = event.target.closest("[data-model-menu-id]");
     if (menuButton) {
@@ -671,9 +703,36 @@ function renderModels() {
       return rightTime - leftTime;
     });
 
+  const totalPages = Math.max(1, Math.ceil(rows.length / MODEL_PAGE_SIZE));
+  modelPage = Math.min(Math.max(1, modelPage), totalPages);
+  const start = (modelPage - 1) * MODEL_PAGE_SIZE;
+  const pageRows = rows.slice(start, start + MODEL_PAGE_SIZE);
   modelEmpty.classList.toggle("hidden", rows.length > 0);
-  modelList.innerHTML = rows.map(renderModelCard).join("");
+  modelList.innerHTML = pageRows.map(renderModelCard).join("");
+  renderModelPagination(rows.length, totalPages);
   loadProtectedModelCovers();
+}
+
+function renderModelPagination(total, totalPages) {
+  if (!modelPagination) {
+    return;
+  }
+  const shouldShow = total > MODEL_PAGE_SIZE;
+  modelPagination.classList.toggle("hidden", !shouldShow);
+  if (!shouldShow) {
+    modelPagination.innerHTML = "";
+    return;
+  }
+
+  const start = (modelPage - 1) * MODEL_PAGE_SIZE + 1;
+  const end = Math.min(total, modelPage * MODEL_PAGE_SIZE);
+  modelPagination.innerHTML = `
+    <span class="pagination-info">第 ${escapeHtml(modelPage)} / ${escapeHtml(totalPages)} 页，显示 ${escapeHtml(start)}-${escapeHtml(end)} 条，共 ${escapeHtml(total)} 条</span>
+    <div class="pagination-actions">
+      <button class="secondary-btn compact-btn" type="button" data-model-page="${escapeAttribute(modelPage - 1)}"${modelPage <= 1 ? " disabled" : ""}>上一页</button>
+      <button class="secondary-btn compact-btn" type="button" data-model-page="${escapeAttribute(modelPage + 1)}"${modelPage >= totalPages ? " disabled" : ""}>下一页</button>
+    </div>
+  `;
 }
 
 function getRenderableModels() {
@@ -1044,8 +1103,12 @@ function renderCredits() {
     ].join(" ")).includes(query))
     : allRecords;
   creditEmpty.textContent = allRecords.length && query ? "没有匹配的积分记录。" : "暂无积分记录。";
+  const totalPages = Math.max(1, Math.ceil(records.length / CREDIT_PAGE_SIZE));
+  creditPage = Math.min(Math.max(1, creditPage), totalPages);
+  const start = (creditPage - 1) * CREDIT_PAGE_SIZE;
+  const pageRecords = records.slice(start, start + CREDIT_PAGE_SIZE);
   creditEmpty.classList.toggle("hidden", records.length > 0);
-  creditRecords.innerHTML = records.map((record) => {
+  creditRecords.innerHTML = pageRecords.map((record) => {
     const plus = Number(record.amount) > 0;
     const reason = record.note || formatCreditRecordTitle(record);
     return `
@@ -1064,6 +1127,29 @@ function renderCredits() {
       </article>
     `;
   }).join("");
+  renderCreditPagination(records.length, totalPages);
+}
+
+function renderCreditPagination(total, totalPages) {
+  if (!creditPagination) {
+    return;
+  }
+  const shouldShow = total > CREDIT_PAGE_SIZE;
+  creditPagination.classList.toggle("hidden", !shouldShow);
+  if (!shouldShow) {
+    creditPagination.innerHTML = "";
+    return;
+  }
+
+  const start = (creditPage - 1) * CREDIT_PAGE_SIZE + 1;
+  const end = Math.min(total, creditPage * CREDIT_PAGE_SIZE);
+  creditPagination.innerHTML = `
+    <span class="pagination-info">第 ${escapeHtml(creditPage)} / ${escapeHtml(totalPages)} 页，显示 ${escapeHtml(start)}-${escapeHtml(end)} 条，共 ${escapeHtml(total)} 条</span>
+    <div class="pagination-actions">
+      <button class="secondary-btn compact-btn" type="button" data-credit-page="${escapeAttribute(creditPage - 1)}"${creditPage <= 1 ? " disabled" : ""}>上一页</button>
+      <button class="secondary-btn compact-btn" type="button" data-credit-page="${escapeAttribute(creditPage + 1)}"${creditPage >= totalPages ? " disabled" : ""}>下一页</button>
+    </div>
+  `;
 }
 
 function normalizeSearchText(value) {

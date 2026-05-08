@@ -10,6 +10,7 @@ import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { KStereoEffect } from "/vendor/kmax/KStereoEffect.js";
 import { KStylusRaycaster } from "/vendor/kmax/KStylusRaycaster.js";
 import { WSTrack } from "/vendor/kmax/ws-track.js";
+import { applySiteBranding } from "/site-brand.js";
 import {
   DEFAULT_PANORAMA_NAME,
   DEFAULT_PANORAMA_URL,
@@ -53,6 +54,7 @@ import {
 } from "/model-preview-task-list.js";
 
 THREE.Cache.enabled = true;
+void applySiteBranding();
 
 const uploadCard = document.getElementById("upload-card");
 const fileInput = document.getElementById("model-files");

@@ -3,13 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/assets/kmax-logo.png" />
+    <link rel="shortcut icon" type="image/png" href="/assets/kmax-logo.png" />
     <title>KMAX 用户中心</title>
     <link rel="stylesheet" href="/model-work.css" />
   </head>
   <body>
     <div class="work-shell">
       <header class="work-topbar">
-        <a class="brand" href="/model-preview.html" target="_blank" rel="noopener">KMAX 用户中心</a>
+        <a class="brand" href="/model-preview.html" target="_blank" rel="noopener">
+          <img class="brand-logo" src="/assets/kmax-logo.png" alt="KMAX" />
+          <span>用户中心</span>
+        </a>
         <div class="topbar-actions">
           <div id="work-user-menu" class="user-menu">
             <button id="work-user-menu-trigger" class="user-menu-trigger" type="button" aria-label="用户信息">
@@ -64,6 +69,7 @@
           <section id="models-view" class="work-view">
             <div id="model-feedback" class="feedback hidden" aria-live="polite"></div>
             <div id="model-list" class="model-list"></div>
+            <div id="model-pagination" class="pagination hidden" aria-label="模型列表分页"></div>
             <p id="model-empty" class="empty-state hidden">暂无模型记录。</p>
           </section>
 
@@ -98,6 +104,7 @@
                 </label>
               </div>
               <div id="credit-records" class="record-list"></div>
+              <div id="credit-pagination" class="pagination hidden" aria-label="积分记录分页"></div>
               <p id="credit-empty" class="empty-state hidden">暂无积分记录。</p>
             </div>
           </section>

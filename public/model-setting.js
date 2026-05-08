@@ -1,9 +1,19 @@
+import { applySiteBranding, normalizeSiteSettings } from "/site-brand.js";
+
 const form = document.getElementById("generator-settings-form");
 const providerSelect = document.getElementById("settings-provider");
 const modelVersionSelect = document.getElementById("settings-model-version");
 const runtimeNote = document.getElementById("settings-runtime-note");
 const feedback = document.getElementById("settings-feedback");
 const saveButton = document.getElementById("save-settings");
+const siteForm = document.getElementById("site-settings-form");
+const siteLogoPreview = document.getElementById("site-logo-preview");
+const siteLogoFile = document.getElementById("site-logo-file");
+const siteLogoFileText = document.getElementById("site-logo-file-text");
+const siteKeywordsInput = document.getElementById("site-keywords");
+const siteDescriptionInput = document.getElementById("site-description");
+const siteFeedback = document.getElementById("site-settings-feedback");
+const saveSiteButton = document.getElementById("save-site-settings");
 const navItems = Array.from(document.querySelectorAll("[data-view]"));
 const views = {
   settings: document.getElementById("settings-view"),
@@ -22,12 +32,15 @@ const createCreditButton = document.getElementById("create-credit");
 const assetTotal = document.getElementById("asset-total");
 const assetTableBody = document.getElementById("asset-table-body");
 const assetEmpty = document.getElementById("asset-empty");
+const assetPagination = document.getElementById("asset-pagination");
 const userTotal = document.getElementById("user-total");
 const userTableBody = document.getElementById("user-table-body");
 const userEmpty = document.getElementById("user-empty");
+const userPagination = document.getElementById("user-pagination");
 const creditTotal = document.getElementById("credit-total");
 const creditTableBody = document.getElementById("credit-table-body");
 const creditEmpty = document.getElementById("credit-empty");
+const creditPagination = document.getElementById("credit-pagination");
 const userDialog = document.getElementById("user-dialog");
 const userForm = document.getElementById("user-form");
 const userDialogTitle = document.getElementById("user-dialog-title");
@@ -64,6 +77,9 @@ const adminUserRole = document.getElementById("admin-user-role");
 const adminUserCreditText = document.getElementById("admin-user-credit-text");
 const adminLogoutButton = document.getElementById("admin-logout");
 const AUTH_STORAGE_KEY = "kmax-model-preview-auth";
+const ASSET_PAGE_SIZE = 20;
+const USER_PAGE_SIZE = 20;
+const CREDIT_PAGE_SIZE = 20;
 
 const viewMeta = {
   settings: {
@@ -93,8 +109,13 @@ let creditRows = [];
 let creditUsers = [];
 let currentAdminUser = null;
 let creditDialogFixedUserId = "";
+let pendingSiteLogoFile = null;
+let assetPage = 1;
+let userPage = 1;
+let creditPage = 1;
 
 bootstrap();
+void applySiteBranding();
 
 async function bootstrap() {
   bindEvents();
@@ -120,6 +141,23 @@ function bindEvents() {
     await saveSettings();
   });
 
+  siteForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await saveSiteSettings();
+  });
+
+  siteLogoFile.addEventListener("change", () => {
+    const file = siteLogoFile.files?.[0];
+    pendingSiteLogoFile = file || null;
+    if (file) {
+      siteLogoPreview.src = URL.createObjectURL(file);
+      siteLogoFileText.textContent = file.name;
+    } else {
+      siteLogoFileText.textContent = "未选择任何文件";
+    }
+    hideSiteFeedback();
+  });
+
   navItems.forEach((button) => {
     button.addEventListener("click", () => {
       switchView(button.dataset.view || "settings");
@@ -128,16 +166,20 @@ function bindEvents() {
 
   providerFilter.addEventListener("change", () => {
     if (currentView === "assets") {
+      assetPage = 1;
       renderAssets();
     }
   });
 
   searchInput.addEventListener("input", () => {
     if (currentView === "assets") {
+      assetPage = 1;
       renderAssets();
     } else if (currentView === "users") {
+      userPage = 1;
       renderUsers();
     } else if (currentView === "credits") {
+      creditPage = 1;
       renderCredits();
     }
   });
@@ -152,6 +194,14 @@ function bindEvents() {
 
   createCreditButton.addEventListener("click", () => {
     void openCreditDialogV2();
+  });
+  assetPagination?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-asset-page]");
+    if (!button || button.disabled) {
+      return;
+    }
+    assetPage = Number(button.dataset.assetPage || 1);
+    renderAssets();
   });
 
   adminUserMenuTrigger?.addEventListener("click", (event) => {
@@ -180,6 +230,14 @@ function bindEvents() {
       return;
     }
     handleUserAction(button.dataset.userAction, user);
+  });
+  userPagination?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-user-page]");
+    if (!button || button.disabled) {
+      return;
+    }
+    userPage = Number(button.dataset.userPage || 1);
+    renderUsers();
   });
 
   userForm.addEventListener("submit", async (event) => {
@@ -214,6 +272,14 @@ function bindEvents() {
       closeCreditDialog();
     }
   });
+  creditPagination?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-credit-page]");
+    if (!button || button.disabled) {
+      return;
+    }
+    creditPage = Number(button.dataset.creditPage || 1);
+    renderCredits();
+  });
 }
 
 async function switchView(viewName) {
@@ -236,6 +302,15 @@ async function switchView(viewName) {
   createUserButton.classList.toggle("hidden", currentView !== "users");
   createCreditButton.classList.toggle("hidden", currentView !== "credits");
   searchInput.value = "";
+  if (currentView === "assets") {
+    assetPage = 1;
+  }
+  if (currentView === "users") {
+    userPage = 1;
+  }
+  if (currentView === "credits") {
+    creditPage = 1;
+  }
 
   await refreshCurrentView();
 }
@@ -254,6 +329,7 @@ async function refreshConfig() {
   apiConfig = await fetchJson("/api/config");
   renderProviderOptions();
   syncModelVersionOptions();
+  renderSiteSettings();
   updateRuntimeNote();
 }
 
@@ -287,6 +363,7 @@ async function ensureAdminSession() {
 async function refreshAssets() {
   assetTableBody.innerHTML = renderLoadingRow(6, "正在读取资源列表...");
   assetEmpty.classList.add("hidden");
+  assetPagination?.classList.add("hidden");
 
   try {
     const data = await fetchJson("/api/admin/assets");
@@ -294,6 +371,7 @@ async function refreshAssets() {
     renderAssets();
   } catch (error) {
     assetRows = [];
+    assetPagination?.classList.add("hidden");
     assetTableBody.innerHTML = renderMessageRow(6, error.message || "资源列表读取失败");
   }
 }
@@ -301,6 +379,7 @@ async function refreshAssets() {
 async function refreshUsers() {
   userTableBody.innerHTML = renderLoadingRow(6, "正在读取用户列表...");
   userEmpty.classList.add("hidden");
+  userPagination?.classList.add("hidden");
 
   try {
     const data = await fetchJson("/api/admin/users");
@@ -308,6 +387,7 @@ async function refreshUsers() {
     renderUsers();
   } catch (error) {
     userRows = [];
+    userPagination?.classList.add("hidden");
     userTableBody.innerHTML = renderMessageRow(6, error.message || "用户列表读取失败");
   }
 }
@@ -315,6 +395,7 @@ async function refreshUsers() {
 async function refreshCredits() {
   creditTableBody.innerHTML = renderLoadingRow(5, "正在读取积分记录...");
   creditEmpty.classList.add("hidden");
+  creditPagination?.classList.add("hidden");
 
   try {
     const data = await fetchJson("/api/admin/credits");
@@ -327,6 +408,7 @@ async function refreshCredits() {
   } catch (error) {
     creditRows = [];
     await refreshCreditUsersFallback();
+    creditPagination?.classList.add("hidden");
     creditTableBody.innerHTML = renderMessageRow(5, error.message || "积分记录读取失败");
   }
 }
@@ -424,6 +506,67 @@ async function saveSettings() {
   }
 }
 
+async function saveSiteSettings() {
+  hideSiteFeedback();
+  saveSiteButton.disabled = true;
+  saveSiteButton.textContent = "保存中...";
+
+  try {
+    const logoFile = pendingSiteLogoFile || siteLogoFile.files?.[0] || null;
+    const payload = getSiteSettingsPayload();
+    let requestOptions = null;
+
+    if (logoFile) {
+      const formData = new FormData();
+      Object.entries(payload).forEach(([key, value]) => {
+        formData.set(key, value);
+      });
+      formData.append("logo", logoFile, logoFile.name);
+      requestOptions = {
+        method: "POST",
+        body: formData
+      };
+    } else {
+      requestOptions = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      };
+    }
+
+    apiConfig = await fetchJson("/api/site-settings", {
+      ...requestOptions
+    });
+    apiConfig.siteSettings = normalizeSiteSettings(apiConfig.siteSettings);
+
+    renderSiteSettings();
+    await applySiteBranding(apiConfig.siteSettings);
+    showSiteFeedback("平台品牌与 TDK 配置已保存。", "success");
+  } catch (error) {
+    showSiteFeedback(error.message || "品牌配置保存失败", "error");
+  } finally {
+    saveSiteButton.disabled = false;
+    saveSiteButton.textContent = "保存品牌配置";
+  }
+}
+
+function getSiteSettingsPayload() {
+  return {
+    keywords: siteKeywordsInput.value.trim(),
+    description: siteDescriptionInput.value.trim()
+  };
+}
+
+function renderSiteSettings() {
+  const settings = normalizeSiteSettings(apiConfig?.siteSettings || {});
+  siteLogoPreview.src = settings.logoUrl || "/assets/kmax-logo.png";
+  siteKeywordsInput.value = settings.keywords || "";
+  siteDescriptionInput.value = settings.description || "";
+  siteLogoFile.value = "";
+  siteLogoFileText.textContent = "未选择任何文件";
+  pendingSiteLogoFile = null;
+}
+
 function renderAssets() {
   const keyword = searchInput.value.trim().toLowerCase();
   const provider = providerFilter.value;
@@ -439,9 +582,36 @@ function renderAssets() {
     return matchesProvider && (!keyword || text.includes(keyword));
   });
 
+  const totalPages = Math.max(1, Math.ceil(rows.length / ASSET_PAGE_SIZE));
+  assetPage = Math.min(Math.max(1, assetPage), totalPages);
+  const start = (assetPage - 1) * ASSET_PAGE_SIZE;
+  const pageRows = rows.slice(start, start + ASSET_PAGE_SIZE);
   assetTotal.textContent = String(rows.length);
   assetEmpty.classList.toggle("hidden", rows.length > 0);
-  assetTableBody.innerHTML = rows.map(renderAssetRow).join("");
+  assetTableBody.innerHTML = pageRows.map(renderAssetRow).join("");
+  renderAssetPagination(rows.length, totalPages);
+}
+
+function renderAssetPagination(total, totalPages) {
+  if (!assetPagination) {
+    return;
+  }
+  const shouldShow = total > ASSET_PAGE_SIZE;
+  assetPagination.classList.toggle("hidden", !shouldShow);
+  if (!shouldShow) {
+    assetPagination.innerHTML = "";
+    return;
+  }
+
+  const start = (assetPage - 1) * ASSET_PAGE_SIZE + 1;
+  const end = Math.min(total, assetPage * ASSET_PAGE_SIZE);
+  assetPagination.innerHTML = `
+    <span class="pagination-info">第 ${escapeHtml(assetPage)} / ${escapeHtml(totalPages)} 页，显示 ${escapeHtml(start)}-${escapeHtml(end)} 条，共 ${escapeHtml(total)} 条</span>
+    <div class="pagination-actions">
+      <button class="secondary-btn compact-btn" type="button" data-asset-page="${escapeAttribute(assetPage - 1)}"${assetPage <= 1 ? " disabled" : ""}>上一页</button>
+      <button class="secondary-btn compact-btn" type="button" data-asset-page="${escapeAttribute(assetPage + 1)}"${assetPage >= totalPages ? " disabled" : ""}>下一页</button>
+    </div>
+  `;
 }
 
 function renderAssetRow(task) {
@@ -479,9 +649,36 @@ function renderUsers() {
     return !keyword || text.includes(keyword);
   });
 
+  const totalPages = Math.max(1, Math.ceil(rows.length / USER_PAGE_SIZE));
+  userPage = Math.min(Math.max(1, userPage), totalPages);
+  const start = (userPage - 1) * USER_PAGE_SIZE;
+  const pageRows = rows.slice(start, start + USER_PAGE_SIZE);
   userTotal.textContent = String(rows.length);
   userEmpty.classList.toggle("hidden", rows.length > 0);
-  userTableBody.innerHTML = rows.map(renderUserRow).join("");
+  userTableBody.innerHTML = pageRows.map(renderUserRow).join("");
+  renderUserPagination(rows.length, totalPages);
+}
+
+function renderUserPagination(total, totalPages) {
+  if (!userPagination) {
+    return;
+  }
+  const shouldShow = total > USER_PAGE_SIZE;
+  userPagination.classList.toggle("hidden", !shouldShow);
+  if (!shouldShow) {
+    userPagination.innerHTML = "";
+    return;
+  }
+
+  const start = (userPage - 1) * USER_PAGE_SIZE + 1;
+  const end = Math.min(total, userPage * USER_PAGE_SIZE);
+  userPagination.innerHTML = `
+    <span class="pagination-info">第 ${escapeHtml(userPage)} / ${escapeHtml(totalPages)} 页，显示 ${escapeHtml(start)}-${escapeHtml(end)} 条，共 ${escapeHtml(total)} 条</span>
+    <div class="pagination-actions">
+      <button class="secondary-btn compact-btn" type="button" data-user-page="${escapeAttribute(userPage - 1)}"${userPage <= 1 ? " disabled" : ""}>上一页</button>
+      <button class="secondary-btn compact-btn" type="button" data-user-page="${escapeAttribute(userPage + 1)}"${userPage >= totalPages ? " disabled" : ""}>下一页</button>
+    </div>
+  `;
 }
 
 function renderCredits() {
@@ -499,9 +696,36 @@ function renderCredits() {
     return !keyword || text.includes(keyword);
   });
 
+  const totalPages = Math.max(1, Math.ceil(rows.length / CREDIT_PAGE_SIZE));
+  creditPage = Math.min(Math.max(1, creditPage), totalPages);
+  const start = (creditPage - 1) * CREDIT_PAGE_SIZE;
+  const pageRows = rows.slice(start, start + CREDIT_PAGE_SIZE);
   creditTotal.textContent = String(rows.length);
   creditEmpty.classList.toggle("hidden", rows.length > 0);
-  creditTableBody.innerHTML = rows.map(renderCreditRow).join("");
+  creditTableBody.innerHTML = pageRows.map(renderCreditRow).join("");
+  renderCreditPagination(rows.length, totalPages);
+}
+
+function renderCreditPagination(total, totalPages) {
+  if (!creditPagination) {
+    return;
+  }
+  const shouldShow = total > CREDIT_PAGE_SIZE;
+  creditPagination.classList.toggle("hidden", !shouldShow);
+  if (!shouldShow) {
+    creditPagination.innerHTML = "";
+    return;
+  }
+
+  const start = (creditPage - 1) * CREDIT_PAGE_SIZE + 1;
+  const end = Math.min(total, creditPage * CREDIT_PAGE_SIZE);
+  creditPagination.innerHTML = `
+    <span class="pagination-info">第 ${escapeHtml(creditPage)} / ${escapeHtml(totalPages)} 页，显示 ${escapeHtml(start)}-${escapeHtml(end)} 条，共 ${escapeHtml(total)} 条</span>
+    <div class="pagination-actions">
+      <button class="secondary-btn compact-btn" type="button" data-credit-page="${escapeAttribute(creditPage - 1)}"${creditPage <= 1 ? " disabled" : ""}>上一页</button>
+      <button class="secondary-btn compact-btn" type="button" data-credit-page="${escapeAttribute(creditPage + 1)}"${creditPage >= totalPages ? " disabled" : ""}>下一页</button>
+    </div>
+  `;
 }
 
 function renderCreditRow(record) {
@@ -931,6 +1155,16 @@ function showFeedback(message, type) {
 function hideFeedback() {
   feedback.textContent = "";
   feedback.className = "feedback hidden";
+}
+
+function showSiteFeedback(message, type) {
+  siteFeedback.textContent = message;
+  siteFeedback.className = `feedback ${type}`;
+}
+
+function hideSiteFeedback() {
+  siteFeedback.textContent = "";
+  siteFeedback.className = "feedback hidden";
 }
 
 function showUserFeedback(message, type) {

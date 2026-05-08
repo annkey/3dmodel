@@ -73,9 +73,19 @@ a {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   color: var(--accent);
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 800;
+}
+
+.brand-logo {
+  width: auto;
+  height: 30px;
+  max-width: 142px;
+  object-fit: contain;
 }
 
 .topbar-actions {
@@ -731,6 +741,37 @@ a {
 .record-list {
   display: grid;
   gap: 10px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 14px;
+}
+
+.pagination-info {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pagination-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination-actions .compact-btn {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .record-item {

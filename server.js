@@ -10,6 +10,7 @@ const { Pool } = require("pg");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
+const siteAssetDir = path.join(publicDir, "assets", "site");
 const envPath = path.join(rootDir, ".env.local");
 const generatorSettingsPath = path.join(rootDir, "generator-settings.json");
 const adminUsersPath = path.join(rootDir, "admin-users.json");
@@ -110,7 +111,8 @@ const MODEL_UPLOAD_ALLOWED_EXTENSIONS = new Set([
   ".jpg",
   ".jpeg",
   ".png",
-  ".webp"
+  ".webp",
+  ".ico"
 ]);
 
 const MIME_TYPES = {
@@ -132,6 +134,21 @@ const MIME_TYPES = {
   ".stl": "model/stl",
   ".bin": "application/octet-stream",
   ".mtl": "text/plain; charset=utf-8"
+};
+
+const DEFAULT_SITE_SETTINGS = {
+  logoUrl: "/assets/kmax-logo.png",
+  iconUrl: "/assets/kmax-browser-icon.png",
+  iconVersion: "fixed",
+  title: "模型播放器",
+  titles: {
+    home: "模型官网门户",
+    player: "模型播放器",
+    work: "用户中心",
+    admin: "模型管理后台"
+  },
+  keywords: "KMAX,AI模型播放器,3D模型生成,3D模型预览,模型播放器",
+  description: "KMAX AI模型播放器提供3D模型生成、模型预览、模型管理与空间交互展示能力。"
 };
 
 const GENERATOR_PROVIDER_OPTIONS = {
@@ -777,6 +794,27 @@ async function handleApi(req, res, requestUrl) {
       return;
     }
     return;
+  }
+
+  if (req.method === "POST" && requestUrl.pathname === "/api/site-settings") {
+    try {
+      assertAdmin(req);
+      const savedSettings = await saveSiteSettingsFromRequest(req, requestUrl);
+      sendJson(res, 200, {
+        ...buildLocalGeneratorConfigResponse(),
+        ok: true,
+        message: "Site settings saved.",
+        siteSettings: savedSettings
+      });
+      return;
+    } catch (error) {
+      sendJson(res, error.status || 400, {
+        error: "SiteSettingsSaveFailed",
+        message: error.message || "Failed to save site settings.",
+        details: error.details || null
+      });
+      return;
+    }
   }
 
   if (req.method === "POST" && requestUrl.pathname === "/api/generate") {
@@ -4511,6 +4549,7 @@ function buildLocalGeneratorConfigResponse() {
     proxied: false,
     providers,
     generatorSettings,
+    siteSettings: getSiteSettings(),
     creditCosts: CREDIT_COSTS,
     optimization
   };
@@ -4587,6 +4626,7 @@ function getGeneratorSettings(providers = buildProviderConfigMap()) {
 function saveGeneratorSettings(payload) {
   const providers = buildProviderConfigMap();
   const provider = normalizeProvider(payload?.provider);
+  const stored = readGeneratorSettingsFile();
 
   if (!providers[provider]?.enabled) {
     const error = new Error("Selected provider is not enabled in the current runtime environment.");
@@ -4596,8 +4636,10 @@ function saveGeneratorSettings(payload) {
 
   const modelVersion = resolveModelVersion(provider, payload?.modelVersion, providers, true);
   const nextSettings = {
+    ...stored,
     provider,
-    modelVersion
+    modelVersion,
+    site: normalizeSiteSettings(stored.site)
   };
 
   runtimeStores.generatorSettings = nextSettings;
@@ -4619,6 +4661,89 @@ function readGeneratorSettingsFile() {
   } catch {
     return {};
   }
+}
+
+function getSiteSettings() {
+  const stored = readGeneratorSettingsFile();
+  return normalizeSiteSettings(stored.site);
+}
+
+async function saveSiteSettingsFromRequest(req, requestUrl) {
+  const contentType = String(req.headers["content-type"] || "").toLowerCase();
+  let fields = {};
+  let logoFile = null;
+
+  if (contentType.includes("multipart/form-data")) {
+    await fsp.mkdir(siteAssetDir, { recursive: true });
+    const parsed = await parseMultipartModelUpload(req, {
+      uploadDir: siteAssetDir,
+      initialUsedBytes: 0,
+      quotaBytes: 2 * 1024 * 1024
+    });
+    fields = parsed.fields || {};
+    logoFile = (parsed.files || []).find((file) => file.fieldName === "logo") || null;
+    if (logoFile && !isImageUploadFile(logoFile)) {
+      await fsp.rm(path.join(siteAssetDir, logoFile.storedName), { force: true });
+      throwHttpError(400, "请上传 PNG、JPG、JPEG 或 WebP 格式的 LOGO 图片。");
+    }
+  } else {
+    const request = toWebRequest(req, requestUrl);
+    fields = await request.json();
+  }
+
+  const stored = readGeneratorSettingsFile();
+  const currentSite = normalizeSiteSettings(stored.site);
+  const logoUrl = logoFile
+    ? `/assets/site/${encodeURIComponent(logoFile.storedName)}`
+    : normalizeText(fields.logoUrl || currentSite.logoUrl || DEFAULT_SITE_SETTINGS.logoUrl);
+  const nextSite = normalizeSiteSettings({
+    logoUrl,
+    iconUrl: DEFAULT_SITE_SETTINGS.iconUrl,
+    iconVersion: DEFAULT_SITE_SETTINGS.iconVersion,
+    title: DEFAULT_SITE_SETTINGS.title,
+    titles: DEFAULT_SITE_SETTINGS.titles,
+    keywords: fields.keywords || currentSite.keywords,
+    description: fields.description || currentSite.description
+  });
+  const nextSettings = {
+    ...stored,
+    site: nextSite
+  };
+
+  runtimeStores.generatorSettings = nextSettings;
+  if (pgPool) {
+    queueRuntimeStorePersist("generator_settings", nextSettings);
+  } else {
+    fs.writeFileSync(generatorSettingsPath, `${JSON.stringify(nextSettings, null, 2)}\n`, "utf8");
+  }
+
+  return nextSite;
+}
+
+function normalizeSiteSettings(value = {}) {
+  return {
+    logoUrl: normalizeSiteLogoUrl(value.logoUrl) || DEFAULT_SITE_SETTINGS.logoUrl,
+    iconUrl: DEFAULT_SITE_SETTINGS.iconUrl,
+    iconVersion: DEFAULT_SITE_SETTINGS.iconVersion,
+    title: DEFAULT_SITE_SETTINGS.title,
+    titles: DEFAULT_SITE_SETTINGS.titles,
+    keywords: clampText(value.keywords, DEFAULT_SITE_SETTINGS.keywords, 240),
+    description: clampText(value.description, DEFAULT_SITE_SETTINGS.description, 360)
+  };
+}
+
+function normalizeSiteLogoUrl(value) {
+  const text = normalizeText(value);
+  if (!text) return "";
+  if (text.startsWith("/assets/") || text.startsWith("data:image/")) {
+    return text;
+  }
+  return "";
+}
+
+function clampText(value, fallback, maxLength) {
+  const text = normalizeText(value);
+  return (text || fallback).slice(0, maxLength);
 }
 
 function selectDefaultProvider(providers) {
@@ -4676,16 +4801,84 @@ async function handleStatic(req, res, pathname) {
     const fileBuffer = await fsp.readFile(filePath);
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || "application/octet-stream";
+    const responseBuffer = ext === ".html"
+      ? Buffer.from(applySiteSettingsToHtml(fileBuffer.toString("utf8"), normalizedPath), "utf8")
+      : fileBuffer;
     res.writeHead(200, {
       "Content-Type": contentType,
       "Cache-Control": "no-store, max-age=0",
       Pragma: "no-cache",
       Expires: "0"
     });
-    res.end(req.method === "HEAD" ? undefined : fileBuffer);
+    res.end(req.method === "HEAD" ? undefined : responseBuffer);
   } catch {
     sendText(res, 404, "Not Found");
   }
+}
+
+function applySiteSettingsToHtml(html, normalizedPath = "") {
+  const settings = getSiteSettings();
+  const title = resolveSitePageTitle(settings, normalizedPath);
+  let nextHtml = html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${escapeHtmlContent(title)}</title>`);
+  nextHtml = upsertHeadTag(nextHtml, "keywords", `<meta name="keywords" content="${escapeHtmlAttribute(settings.keywords)}" />`);
+  nextHtml = upsertHeadTag(nextHtml, "description", `<meta name="description" content="${escapeHtmlAttribute(settings.description)}" />`);
+  const iconHref = withAssetVersion(settings.iconUrl, settings.iconVersion);
+  const iconType = inferSiteIconContentType(settings.iconUrl);
+  nextHtml = upsertHeadLink(nextHtml, "icon", `<link rel="icon" type="${escapeHtmlAttribute(iconType)}" href="${escapeHtmlAttribute(iconHref)}" />`);
+  nextHtml = upsertHeadLink(nextHtml, "shortcut icon", `<link rel="shortcut icon" type="${escapeHtmlAttribute(iconType)}" href="${escapeHtmlAttribute(iconHref)}" />`);
+  return nextHtml;
+}
+
+function inferSiteIconContentType(url) {
+  const cleanPath = normalizeText(url).split("?")[0];
+  const ext = path.extname(cleanPath).toLowerCase();
+  return MIME_TYPES[ext] || "image/png";
+}
+
+function withAssetVersion(url, version) {
+  const text = normalizeText(url);
+  const suffix = normalizeText(version);
+  if (!text || !suffix || text.startsWith("data:image/")) return text;
+  return `${text}${text.includes("?") ? "&" : "?"}v=${encodeURIComponent(suffix)}`;
+}
+
+function resolveSitePageTitle(settings, normalizedPath = "") {
+  const titles = settings.titles || DEFAULT_SITE_SETTINGS.titles;
+  const filename = path.basename(normalizedPath || "index.html").toLowerCase();
+  if (filename === "index.html") return titles.home || settings.title;
+  if (filename === "model-preview.html") return titles.player || settings.title;
+  if (filename === "model-work.html") return titles.work || settings.title;
+  if (filename === "model-setting.html") return titles.admin || settings.title;
+  return settings.title;
+}
+
+function upsertHeadTag(html, name, tag) {
+  const pattern = new RegExp(`<meta\\s+name=["']${name}["'][^>]*>`, "i");
+  if (pattern.test(html)) {
+    return html.replace(pattern, tag);
+  }
+  return html.replace(/<\/head>/i, `    ${tag}\n  </head>`);
+}
+
+function upsertHeadLink(html, rel, tag) {
+  const pattern = new RegExp(`<link\\s+rel=["']${rel}["'][^>]*>`, "i");
+  if (pattern.test(html)) {
+    return html.replace(pattern, tag);
+  }
+  return html.replace(/<\/head>/i, `    ${tag}\n  </head>`);
+}
+
+function escapeHtmlContent(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function escapeHtmlAttribute(value) {
+  return escapeHtmlContent(value)
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function toWebRequest(req, requestUrl) {

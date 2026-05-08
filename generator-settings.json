@@ -1,4 +1,10 @@
 {
   "provider": "meshy",
-  "modelVersion": "latest"
+  "modelVersion": "latest",
+  "site": {
+    "logoUrl": "/assets/site/31efaefc-b11c-4bf4-b6c2-2c78669b609d-KMAX%E9%80%8F%E6%98%8ELOGO.png",
+    "title": "AI模型应用",
+    "keywords": "KMAX,AI模型播放器,3D模型生成,3D模型预览",
+    "description": "KMAX AI模型播放器提供3D模型生成、模型预览、模型管理与空间交互展示能力"
+  }
 }
