@@ -46,6 +46,27 @@ export const GENERATOR_PROVIDER_CONFIG = {
     defaultGeometryQuality: "standard",
     imageAccept: "image/png,image/jpeg",
     textPlaceholder: "例如：一个白色科幻头盔，蓝色发光细节，产品级渲染"
+  },
+  hunyuan: {
+    name: "Hunyuan 3D",
+    modelVersions: [
+      { value: "pro-3.1", label: "专业版 3.1" },
+      { value: "pro-3.0", label: "专业版 3.0" },
+      { value: "rapid", label: "极速版" }
+    ],
+    textureOptions: [
+      { value: "standard", label: "标准贴图" },
+      { value: "detailed", label: "PBR 贴图" }
+    ],
+    geometryOptions: [
+      { value: "standard", label: "标准" },
+      { value: "lowpoly", label: "低多边形" }
+    ],
+    defaultModelVersion: "pro-3.1",
+    defaultTextureQuality: "standard",
+    defaultGeometryQuality: "standard",
+    imageAccept: "image/png,image/jpeg,image/webp",
+    textPlaceholder: "例如：一个白色科幻头盔，蓝色发光细节，产品级渲染"
   }
 };
 

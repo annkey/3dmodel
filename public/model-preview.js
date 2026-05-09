@@ -1409,7 +1409,7 @@ function getActiveOptimizerConfig() {
 }
 
 function PROVIDER_CONFIG_FALLBACK(provider) {
-  return provider === "tripo" ? GENERATOR_PROVIDER_CONFIG.tripo : GENERATOR_PROVIDER_CONFIG.meshy;
+  return GENERATOR_PROVIDER_CONFIG[provider] || GENERATOR_PROVIDER_CONFIG.tripo;
 }
 
 function sanitizeOptimizerText(text, fallback = "") {

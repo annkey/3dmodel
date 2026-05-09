@@ -1188,7 +1188,10 @@ function hideCreditFeedback() {
 }
 
 function normalizeProvider(value) {
-  return String(value || "tripo").toLowerCase() === "meshy" ? "meshy" : "tripo";
+  const provider = String(value || "tripo").toLowerCase();
+  if (provider === "meshy") return "meshy";
+  if (provider === "hunyuan" || provider === "hunyun") return "hunyuan";
+  return "tripo";
 }
 
 function getStatusClass(status) {

@@ -28,6 +28,11 @@ const TRIPO_API_KEY = process.env.TRIPO_API_KEY || "";
 const TRIPO_API_BASE = "https://api.tripo3d.ai/v2/openapi";
 const MESHY_API_KEY = process.env.MESHY_API_KEY || "";
 const MESHY_API_BASE = "https://api.meshy.ai";
+const HUNYUAN_SECRET_ID = process.env.HUNYUAN_SECRET_ID || process.env.TENCENTCLOUD_SECRET_ID || "";
+const HUNYUAN_SECRET_KEY = process.env.HUNYUAN_SECRET_KEY || process.env.TENCENTCLOUD_SECRET_KEY || "";
+const HUNYUAN_REGION = process.env.HUNYUAN_REGION || process.env.TENCENTCLOUD_REGION || "ap-guangzhou";
+const HUNYUAN_API_BASE = "https://ai3d.tencentcloudapi.com";
+const HUNYUAN_API_VERSION = "2025-05-13";
 const GENERATOR_API_BASE = normalizeApiBase(process.env.GENERATOR_API_BASE || "");
 const MODEL_STORAGE_DRIVER = normalizeStorageDriver(process.env.MODEL_STORAGE_DRIVER || "oss");
 const ALIYUN_OSS_REGION = process.env.ALIYUN_OSS_REGION || "oss-cn-shenzhen";
@@ -58,6 +63,7 @@ const NORMALIZED_FINAL_STATUSES = new Set([
 
 const meshyTaskContexts = new Map();
 const meshyRefineTasks = new Map();
+const hunyuanTaskContexts = new Map();
 const optimizationTaskContexts = new Map();
 const generatedTaskRecords = new Map();
 const generatedTaskPersistPromises = new Map();
@@ -168,6 +174,15 @@ const GENERATOR_PROVIDER_OPTIONS = {
       { value: "latest", label: "latest (Meshy 6)" },
       { value: "meshy-6", label: "meshy-6" },
       { value: "meshy-5", label: "meshy-5" }
+    ]
+  },
+  hunyuan: {
+    name: "Hunyuan 3D",
+    defaultModelVersion: "pro-3.1",
+    modelVersions: [
+      { value: "pro-3.1", label: "专业版 3.1" },
+      { value: "pro-3.0", label: "专业版 3.0" },
+      { value: "rapid", label: "极速版" }
     ]
   }
 };
@@ -859,6 +874,8 @@ async function handleApi(req, res, requestUrl) {
 
       if (provider === "meshy") {
         await handleMeshyGenerate(res, form, session.user.id);
+      } else if (provider === "hunyuan") {
+        await handleHunyuanGenerate(res, form, session.user.id);
       } else {
         await handleTripoGenerate(res, form, session.user.id);
       }
@@ -948,6 +965,8 @@ async function handleApi(req, res, requestUrl) {
 
       if (provider === "meshy") {
         await handleMeshyTaskQuery(res, taskId, session?.user?.id);
+      } else if (provider === "hunyuan") {
+        await handleHunyuanTaskQuery(res, taskId, session?.user?.id);
       } else {
         await handleTripoTaskQuery(res, taskId, session?.user?.id);
       }
@@ -1309,6 +1328,107 @@ async function handleMeshyTaskQuery(res, taskId, userId = "") {
   sendJson(res, 200, normalized);
 }
 
+async function handleHunyuanGenerate(res, form, userId = "") {
+  ensureProviderEnabled("hunyuan");
+
+  const mode = String(form.get("mode") || "text");
+  const modelVersion = String(form.get("modelVersion") || GENERATOR_PROVIDER_OPTIONS.hunyuan.defaultModelVersion);
+  const textureQuality = String(form.get("textureQuality") || "standard");
+  const geometryQuality = String(form.get("geometryQuality") || "standard");
+  const prompt = normalizeText(form.get("prompt"));
+  const imageFile = form.get("image");
+  const isRapid = modelVersion === "rapid";
+  const action = isRapid ? "SubmitHunyuanTo3DRapidJob" : "SubmitHunyuanTo3DProJob";
+
+  const payload = {};
+
+  if (mode === "image") {
+    if (!(imageFile instanceof File) || imageFile.size === 0) {
+      sendJson(res, 400, {
+        error: "ValidationError",
+        message: "Image mode requires an uploaded image."
+      });
+      return;
+    }
+
+    if (!["image/png", "image/jpeg", "image/webp"].includes(imageFile.type)) {
+      sendJson(res, 400, {
+        error: "ValidationError",
+        message: "Hunyuan 3D image mode only supports PNG, JPEG or WebP images."
+      });
+      return;
+    }
+
+    payload.ImageBase64 = await fileToBase64(imageFile);
+  } else {
+    if (!prompt) {
+      sendJson(res, 400, {
+        error: "ValidationError",
+        message: "Text mode requires a prompt."
+      });
+      return;
+    }
+
+    payload.Prompt = isRapid ? prompt.slice(0, 200) : prompt.slice(0, 1024);
+  }
+
+  if (isRapid) {
+    payload.ResultFormat = "GLB";
+  } else {
+    payload.Model = modelVersion === "pro-3.0" ? "3.0" : "3.1";
+    payload.GenerateType = geometryQuality === "lowpoly" ? "LowPoly" : "Normal";
+    payload.EnablePBR = textureQuality === "detailed";
+  }
+
+  const hunyuanResponse = await hunyuanFetch(action, payload);
+  const taskId = hunyuanResponse.JobId || hunyuanResponse.JobID || hunyuanResponse.TaskId || hunyuanResponse.TaskID || null;
+
+  if (taskId) {
+    hunyuanTaskContexts.set(taskId, {
+      provider: "hunyuan",
+      mode,
+      modelVersion,
+      textureQuality,
+      geometryQuality,
+      queryAction: isRapid ? "QueryHunyuanTo3DRapidJob" : "QueryHunyuanTo3DProJob"
+    });
+  }
+
+  const responseBody = {
+    ok: true,
+    provider: "hunyuan",
+    providerName: "Hunyuan 3D",
+    mode,
+    taskId,
+    displayModelVersion: modelVersion,
+    payload,
+    raw: hunyuanResponse
+  };
+
+  recordGeneratedTask(responseBody, {
+    provider: "hunyuan",
+    providerName: "Hunyuan 3D",
+    mode,
+    prompt: prompt || imageFile?.name || "",
+    modelVersion,
+    userId
+  });
+  sendJson(res, 200, responseBody);
+}
+
+async function handleHunyuanTaskQuery(res, taskId, userId = "") {
+  ensureProviderEnabled("hunyuan");
+
+  const context = hunyuanTaskContexts.get(taskId) || null;
+  const action = context?.queryAction || "QueryHunyuanTo3DProJob";
+  const task = await hunyuanFetch(action, { JobId: taskId });
+  const normalized = normalizeHunyuanTask(task, context, taskId);
+
+  recordGeneratedTask(normalized, { provider: "hunyuan", taskId, userId });
+  await attachPersistedGeneratedModel(normalized, userId);
+  sendJson(res, 200, normalized);
+}
+
 async function handleModelOptimize(res, form) {
   const provider = normalizeProvider(form.get("provider"));
   const operation = normalizeOptimizationOperation(form.get("operation"));
@@ -1626,6 +1746,83 @@ async function meshyFetch(endpoint, options) {
   return parseHttpJson(response);
 }
 
+async function hunyuanFetch(action, payload = {}) {
+  const body = JSON.stringify(payload || {});
+  const timestamp = Math.floor(Date.now() / 1000);
+  const host = new URL(HUNYUAN_API_BASE).host;
+  const authorization = signTencentCloudRequest({
+    action,
+    body,
+    host,
+    timestamp
+  });
+
+  const response = await fetch(HUNYUAN_API_BASE, {
+    method: "POST",
+    headers: {
+      Authorization: authorization,
+      "Content-Type": "application/json; charset=utf-8",
+      Host: host,
+      "X-TC-Action": action,
+      "X-TC-Version": HUNYUAN_API_VERSION,
+      "X-TC-Timestamp": String(timestamp),
+      "X-TC-Region": HUNYUAN_REGION
+    },
+    body
+  });
+
+  const data = await parseHttpJson(response);
+  const result = data?.Response || data;
+
+  if (result?.Error) {
+    const error = new Error(result.Error.Message || result.Error.Code || "Hunyuan 3D request failed.");
+    error.status = response.status || 500;
+    error.details = result;
+    throw error;
+  }
+
+  return result;
+}
+
+function signTencentCloudRequest({ action, body, host, timestamp }) {
+  const service = "ai3d";
+  const algorithm = "TC3-HMAC-SHA256";
+  const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
+  const credentialScope = `${date}/${service}/tc3_request`;
+  const hashedPayload = sha256Hex(body);
+  const canonicalHeaders = `content-type:application/json; charset=utf-8\nhost:${host}\n`;
+  const signedHeaders = "content-type;host";
+  const canonicalRequest = [
+    "POST",
+    "/",
+    "",
+    canonicalHeaders,
+    signedHeaders,
+    hashedPayload
+  ].join("\n");
+  const stringToSign = [
+    algorithm,
+    String(timestamp),
+    credentialScope,
+    sha256Hex(canonicalRequest)
+  ].join("\n");
+
+  const secretDate = hmacSha256(`TC3${HUNYUAN_SECRET_KEY}`, date);
+  const secretService = hmacSha256(secretDate, service);
+  const secretSigning = hmacSha256(secretService, "tc3_request");
+  const signature = hmacSha256(secretSigning, stringToSign, "hex");
+
+  return `${algorithm} Credential=${HUNYUAN_SECRET_ID}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+}
+
+function sha256Hex(value) {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function hmacSha256(key, value, digest) {
+  return crypto.createHmac("sha256", key).update(value, "utf8").digest(digest);
+}
+
 async function parseHttpJson(response) {
   const text = await response.text();
   const data = tryParseJson(text);
@@ -1784,6 +1981,11 @@ async function fileToDataUri(file, mimeTypeOverride = "") {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
+async function fileToBase64(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  return Buffer.from(arrayBuffer).toString("base64");
+}
+
 function ensureProviderEnabled(provider) {
   if (provider === "meshy" && !MESHY_API_KEY) {
     const error = new Error("MESHY_API_KEY is not configured in the runtime environment.");
@@ -1796,10 +1998,19 @@ function ensureProviderEnabled(provider) {
     error.status = 500;
     throw error;
   }
+
+  if (provider === "hunyuan" && (!HUNYUAN_SECRET_ID || !HUNYUAN_SECRET_KEY)) {
+    const error = new Error("HUNYUAN_SECRET_ID and HUNYUAN_SECRET_KEY are not configured in the runtime environment.");
+    error.status = 500;
+    throw error;
+  }
 }
 
 function normalizeProvider(value) {
-  return String(value || "tripo").toLowerCase() === "meshy" ? "meshy" : "tripo";
+  const provider = String(value || "tripo").toLowerCase();
+  if (provider === "meshy") return "meshy";
+  if (provider === "hunyuan" || provider === "hunyun") return "hunyuan";
+  return "tripo";
 }
 
 function normalizeOptimizationOperation(value) {
@@ -1874,6 +2085,132 @@ function inferMeshyStageText(type) {
   }
 
   return "Meshy 生成任务";
+}
+
+function normalizeHunyuanTask(task, context, fallbackTaskId) {
+  const status = normalizeHunyuanStatus(task.Status || task.JobStatus || task.State);
+  const rawFiles = task.ResultFile3Ds || task.ResultFiles || task.Files || [];
+  const modelUrls = buildHunyuanModelUrls(rawFiles);
+  const renderedImage = findHunyuanPreviewImage(rawFiles) || task.PreviewImageUrl || task.PreviewImage || null;
+  const taskId = task.JobId || task.JobID || task.TaskId || task.TaskID || fallbackTaskId;
+  const progress = typeof task.Progress === "number"
+    ? task.Progress
+    : status === "success"
+      ? 100
+      : status === "running"
+        ? 50
+        : status === "queued"
+          ? 5
+          : 0;
+
+  return {
+    ok: true,
+    provider: "hunyuan",
+    providerName: "Hunyuan 3D",
+    mode: context?.mode || "text",
+    taskId,
+    type: context?.queryAction || "hunyuan-to-3d",
+    status,
+    statusText: task.ErrorMessage || task.FailMessage || task.Message || task.Status || status,
+    progress,
+    finalized: NORMALIZED_FINAL_STATUSES.has(status),
+    stageText: "Hunyuan 3D 生成任务",
+    displayModelVersion: context?.modelVersion || "",
+    input: task.Input || {},
+    output: rawFiles,
+    renderedImage,
+    preferredModelUrl:
+      modelUrls.glb ||
+      modelUrls.model ||
+      modelUrls.fbx ||
+      modelUrls.obj ||
+      modelUrls.stl ||
+      modelUrls.usdz ||
+      null,
+    modelUrls,
+    downloadItems: buildHunyuanDownloadItems(rawFiles, renderedImage),
+    raw: task
+  };
+}
+
+function normalizeHunyuanStatus(status) {
+  const value = String(status || "").toUpperCase();
+  const map = {
+    WAIT: "queued",
+    QUEUED: "queued",
+    RUN: "running",
+    RUNNING: "running",
+    PROCESSING: "running",
+    DONE: "success",
+    SUCCESS: "success",
+    SUCCEEDED: "success",
+    FAIL: "failed",
+    FAILED: "failed",
+    CANCELED: "cancelled",
+    CANCELLED: "cancelled",
+    EXPIRED: "expired"
+  };
+  return map[value] || "unknown";
+}
+
+function buildHunyuanModelUrls(files) {
+  const urls = {};
+
+  for (const file of Array.isArray(files) ? files : []) {
+    const url = file?.Url || file?.URL || file?.FileUrl || file?.FileURL || "";
+    if (!url) continue;
+
+    const type = inferHunyuanFileType(file, url);
+    if (type === "glb") urls.glb = urls.glb || url;
+    else if (type === "fbx") urls.fbx = urls.fbx || url;
+    else if (type === "obj") urls.obj = urls.obj || url;
+    else if (type === "stl") urls.stl = urls.stl || url;
+    else if (type === "usdz") urls.usdz = urls.usdz || url;
+    else if (type === "mtl") urls.mtl = urls.mtl || url;
+    else if (type === "zip") urls.zip = urls.zip || url;
+    else urls[type] = urls[type] || url;
+
+    urls.model = urls.model || url;
+  }
+
+  return urls;
+}
+
+function inferHunyuanFileType(file, url) {
+  const explicitType = String(file?.Type || file?.Format || "").trim().toLowerCase();
+  if (explicitType) return explicitType;
+
+  try {
+    const ext = path.extname(new URL(url).pathname).slice(1).toLowerCase();
+    return ext || "model";
+  } catch {
+    return "model";
+  }
+}
+
+function findHunyuanPreviewImage(files) {
+  for (const file of Array.isArray(files) ? files : []) {
+    const previewUrl = file?.PreviewImageUrl || file?.PreviewImageURL || file?.PreviewUrl || file?.PreviewURL || "";
+    if (previewUrl) return previewUrl;
+  }
+
+  return "";
+}
+
+function buildHunyuanDownloadItems(files, previewImage) {
+  const items = [];
+  for (const file of Array.isArray(files) ? files : []) {
+    const url = file?.Url || file?.URL || file?.FileUrl || file?.FileURL || "";
+    if (!url) continue;
+    const type = inferHunyuanFileType(file, url).toUpperCase();
+    items.push({ label: `下载 ${type}`, url });
+  }
+
+  if (previewImage) {
+    items.push({ label: "下载预览图", url: previewImage });
+  }
+
+  return items;
 }
 
 function buildTripoDownloadItems(output) {
@@ -4569,6 +4906,12 @@ function buildProviderConfigMap() {
       name: GENERATOR_PROVIDER_OPTIONS.meshy.name,
       defaultModelVersion: GENERATOR_PROVIDER_OPTIONS.meshy.defaultModelVersion,
       modelVersions: GENERATOR_PROVIDER_OPTIONS.meshy.modelVersions
+    },
+    hunyuan: {
+      enabled: useRemoteGenerator || Boolean(HUNYUAN_SECRET_ID && HUNYUAN_SECRET_KEY),
+      name: GENERATOR_PROVIDER_OPTIONS.hunyuan.name,
+      defaultModelVersion: GENERATOR_PROVIDER_OPTIONS.hunyuan.defaultModelVersion,
+      modelVersions: GENERATOR_PROVIDER_OPTIONS.hunyuan.modelVersions
     }
   };
 }

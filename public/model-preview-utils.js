@@ -1,10 +1,15 @@
 export function normalizeProviderValue(value) {
-  return String(value || "tripo").toLowerCase() === "meshy" ? "meshy" : "tripo";
+  const provider = String(value || "tripo").toLowerCase();
+  if (provider === "meshy") return "meshy";
+  if (provider === "hunyuan" || provider === "hunyun") return "hunyuan";
+  return "tripo";
 }
 
 export function sanitizeGenerationText(value, fallback = "") {
   const text = String(value || "")
     .replace(/\bmeshy\b/ig, "")
+    .replace(/\bhunyuan\b/ig, "")
+    .replace(/\bhunyun\b/ig, "")
     .replace(/\btripo3d\b/ig, "")
     .replace(/\btripo\b/ig, "")
     .replace(/[·|]/g, " ")
