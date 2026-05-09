@@ -2491,6 +2491,7 @@ async function handleGeneratedTaskUpdate(requestTaskId, provider, task) {
   }
 
   if (nextTask.finalized) {
+    stopTaskPolling(requestTaskId);
     stopTaskPolling(nextTask.id);
 
     if (nextTask.status === "success" && nextTask.preferredModelUrl) {

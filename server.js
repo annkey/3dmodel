@@ -223,7 +223,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    await handleStatic(req, res, requestUrl.pathname);
+    await handleStatic(req, res, requestUrl);
   } catch (error) {
     sendJson(res, 500, {
       error: "ServerError",
@@ -950,6 +950,12 @@ async function handleApi(req, res, requestUrl) {
     }
 
     try {
+      const completedTask = buildCompletedGeneratedTaskResponse(taskId, provider, session?.user?.id);
+      if (completedTask) {
+        sendJson(res, 200, completedTask);
+        return;
+      }
+
       if (GENERATOR_API_BASE) {
         const remoteTask = await proxyRemoteJson(`/api/task/${encodeURIComponent(taskId)}?provider=${encodeURIComponent(provider)}`);
         const responseBody = {
@@ -3971,6 +3977,83 @@ function toPublicSharedModel(model) {
   };
 }
 
+function buildCompletedGeneratedTaskResponse(taskId, provider, userId = "") {
+  const normalizedTaskId = normalizeText(taskId);
+  if (!normalizedTaskId) {
+    return null;
+  }
+
+  const cachedTask = generatedTaskRecords.get(normalizedTaskId);
+  if (
+    cachedTask
+    && cachedTask.status === "success"
+    && cachedTask.finalized
+    && (cachedTask.preferredModelUrl || hasAnyModelUrl(cachedTask.modelUrls))
+    && (!cachedTask.userId || !userId || cachedTask.userId === userId)
+  ) {
+    return {
+      ok: true,
+      ...cachedTask,
+      provider: provider || cachedTask.provider,
+      progress: 100,
+      finalized: true
+    };
+  }
+
+  if (!userId) {
+    return null;
+  }
+
+  const store = readUserModelIndexFile();
+  const model = store.models.find((item) => (
+    item.userId === userId
+    && item.source === "ai"
+    && item.generatedTaskId === normalizedTaskId
+    && (!provider || item.provider === provider)
+  ));
+  if (!model) {
+    return null;
+  }
+
+  const publicModel = toPublicUserModel(model);
+  const format = normalizeText(publicModel.format).toLowerCase();
+  const prompt = normalizeText(publicModel.generationParams?.prompt || publicModel.name || normalizedTaskId);
+  return {
+    ok: true,
+    provider: publicModel.provider || provider,
+    providerName: publicModel.providerName || publicModel.sourceText || getProviderDisplayName(provider),
+    mode: publicModel.mode || "text",
+    taskId: normalizedTaskId,
+    type: "persisted-generated-model",
+    status: "success",
+    statusText: "success",
+    progress: 100,
+    finalized: true,
+    stageText: "已保存到模型库",
+    displayModelVersion: publicModel.displayModelVersion || "",
+    input: publicModel.generationParams?.input || { prompt },
+    output: publicModel.remoteModelUrls || {},
+    prompt,
+    renderedImage: publicModel.coverUrl || "",
+    preferredModelUrl: publicModel.modelUrl || "",
+    persistedModel: publicModel,
+    modelUrls: {
+      model: publicModel.modelUrl || "",
+      glb: format === "glb" ? publicModel.modelUrl || "" : "",
+      fbx: format === "fbx" ? publicModel.modelUrl || "" : "",
+      obj: format === "obj" ? publicModel.modelUrl || "" : "",
+      stl: format === "stl" ? publicModel.modelUrl || "" : ""
+    },
+    downloadItems: [{ label: "下载模型", url: publicModel.modelUrl }],
+    createdAt: publicModel.createdAt,
+    updatedAt: publicModel.updatedAt
+  };
+}
+
+function hasAnyModelUrl(modelUrls) {
+  return Object.values(modelUrls || {}).some((url) => Boolean(normalizeText(url)));
+}
+
 async function attachPersistedGeneratedModel(task, userId) {
   if (!userId || task?.status !== "success" || !task?.preferredModelUrl) {
     return null;
@@ -5241,12 +5324,13 @@ function resolveModelVersion(provider, requestedValue, providers = buildProvider
   return defaultValue;
 }
 
-async function handleStatic(req, res, pathname) {
+async function handleStatic(req, res, requestUrl) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     sendText(res, 405, "Method Not Allowed");
     return;
   }
 
+  const pathname = requestUrl.pathname;
   let targetPath = pathname === "/" ? "/index.html" : pathname;
   targetPath = decodeURIComponent(targetPath);
 
@@ -5262,22 +5346,96 @@ async function handleStatic(req, res, pathname) {
   }
 
   try {
+    const stats = await fsp.stat(filePath);
     const fileBuffer = await fsp.readFile(filePath);
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || "application/octet-stream";
     const responseBuffer = ext === ".html"
       ? Buffer.from(applySiteSettingsToHtml(fileBuffer.toString("utf8"), normalizedPath), "utf8")
       : fileBuffer;
+    const cacheHeaders = buildStaticCacheHeaders(normalizedPath, ext, stats, requestUrl);
+
+    if (shouldReturnNotModified(req, cacheHeaders)) {
+      res.writeHead(304, cacheHeaders);
+      res.end();
+      return;
+    }
+
     res.writeHead(200, {
       "Content-Type": contentType,
-      "Cache-Control": "no-store, max-age=0",
-      Pragma: "no-cache",
-      Expires: "0"
+      "Content-Length": responseBuffer.length,
+      ...cacheHeaders
     });
     res.end(req.method === "HEAD" ? undefined : responseBuffer);
   } catch {
     sendText(res, 404, "Not Found");
   }
+}
+
+function buildStaticCacheHeaders(normalizedPath, ext, stats, requestUrl) {
+  const normalizedWebPath = normalizedPath.replace(/\\/g, "/");
+  const headers = {
+    "Cache-Control": resolveStaticCacheControl(normalizedWebPath, ext, requestUrl)
+  };
+
+  if (ext === ".html") {
+    headers.Pragma = "no-cache";
+    headers.Expires = "0";
+    return headers;
+  }
+
+  headers.ETag = buildStaticEtag(stats);
+  headers["Last-Modified"] = stats.mtime.toUTCString();
+  return headers;
+}
+
+function resolveStaticCacheControl(normalizedPath, ext, requestUrl) {
+  if (ext === ".html") {
+    return "no-cache, max-age=0, must-revalidate";
+  }
+
+  if (requestUrl.searchParams.has("v") || requestUrl.searchParams.has("version")) {
+    return "public, max-age=31536000, immutable";
+  }
+
+  if (normalizedPath.startsWith("vendor/")) {
+    return "public, max-age=31536000, immutable";
+  }
+
+  if (normalizedPath.startsWith("assets/") || normalizedPath.startsWith("panoramas/")) {
+    return "public, max-age=604800, stale-while-revalidate=2592000";
+  }
+
+  if (ext === ".js" || ext === ".css" || ext === ".wasm") {
+    return "public, max-age=300, stale-while-revalidate=86400";
+  }
+
+  return "public, max-age=3600, stale-while-revalidate=86400";
+}
+
+function buildStaticEtag(stats) {
+  return `W/"${stats.size.toString(16)}-${Math.trunc(stats.mtimeMs).toString(16)}"`;
+}
+
+function shouldReturnNotModified(req, headers) {
+  const etag = headers.ETag;
+  const ifNoneMatch = req.headers["if-none-match"];
+  if (etag && typeof ifNoneMatch === "string") {
+    const requestedEtags = ifNoneMatch.split(",").map((value) => value.trim());
+    if (requestedEtags.includes(etag) || requestedEtags.includes("*")) {
+      return true;
+    }
+  }
+
+  const lastModified = headers["Last-Modified"];
+  const ifModifiedSince = req.headers["if-modified-since"];
+  if (lastModified && typeof ifModifiedSince === "string") {
+    const modifiedTime = Date.parse(lastModified);
+    const requestedTime = Date.parse(ifModifiedSince);
+    return Number.isFinite(modifiedTime) && Number.isFinite(requestedTime) && requestedTime >= modifiedTime;
+  }
+
+  return false;
 }
 
 function applySiteSettingsToHtml(html, normalizedPath = "") {
