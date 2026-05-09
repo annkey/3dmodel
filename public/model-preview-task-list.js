@@ -1,3 +1,5 @@
+const DEFAULT_MODEL_COVER_URL = "/assets/default-model-cover.svg";
+
 export function sortGeneratedTaskRecords(tasks) {
   return [...tasks].sort((left, right) => {
     const leftTime = Date.parse(left.updatedAt || left.createdAt || 0) || 0;
@@ -115,8 +117,8 @@ function renderGeneratedTaskCardMarkup(task, options) {
   const statusLabel = formatStatus(task.statusText || task.status);
   const coverUrl = task.renderedImage || task.thumbnailUrl || task.imageUrl || task.persistedModel?.coverUrl || "";
   const coverHtml = coverUrl
-    ? `<img src="${escapeHtml(coverUrl)}" alt="${escapeHtml(title)} 封面" loading="lazy" />`
-    : `<span class="model-list-cube"></span>`;
+    ? `<img src="${escapeHtml(coverUrl)}" alt="${escapeHtml(title)} 封面" loading="lazy" onerror="this.onerror=null;this.src='${DEFAULT_MODEL_COVER_URL}'" />`
+    : `<img src="${DEFAULT_MODEL_COVER_URL}" alt="${escapeHtml(title)} 封面" loading="lazy" />`;
 
   return `
     <article class="model-list-item">

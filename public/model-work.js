@@ -2,6 +2,7 @@ import { applySiteBranding } from "/site-brand.js";
 
 const AUTH_STORAGE_KEY = "kmax-model-preview-auth";
 const GENERATED_TASK_STORAGE_KEY = "model-preview-generated-tasks";
+const DEFAULT_MODEL_COVER_URL = "/assets/default-model-cover.svg";
 const navItems = Array.from(document.querySelectorAll("[data-view]"));
 const views = {
   models: document.getElementById("models-view"),
@@ -865,10 +866,10 @@ function renderModelCard(item) {
   const cover = item.coverUrl || item.imageUrl || item.renderedImage || item.thumbnailUrl;
   const protectedCover = isProtectedWorkAssetUrl(cover);
   const coverHtml = protectedCover
-    ? `<img data-cover-url="${escapeAttribute(cover)}" alt="${escapeAttribute(title)} 封面" loading="lazy" />`
+    ? `<img data-cover-url="${escapeAttribute(cover)}" alt="${escapeAttribute(title)} 封面" loading="lazy" onerror="this.onerror=null;this.src='${DEFAULT_MODEL_COVER_URL}'" />`
     : cover
-    ? `<img src="${escapeAttribute(cover)}" alt="${escapeAttribute(title)} 封面" loading="lazy" />`
-    : `<span class="model-cube"></span>`;
+    ? `<img src="${escapeAttribute(cover)}" alt="${escapeAttribute(title)} 封面" loading="lazy" onerror="this.onerror=null;this.src='${DEFAULT_MODEL_COVER_URL}'" />`
+    : `<img src="${DEFAULT_MODEL_COVER_URL}" alt="${escapeAttribute(title)} 封面" loading="lazy" />`;
   const actionMenu = `
         <button class="card-menu-trigger" type="button" data-model-menu-id="${escapeAttribute(item.id)}" aria-label="模型操作" aria-haspopup="menu" aria-expanded="false">...</button>
         <div class="card-action-menu hidden" data-model-menu="${escapeAttribute(item.id)}" role="menu">
@@ -1057,7 +1058,7 @@ function loadProtectedModelCovers() {
         });
       })
       .catch(() => {
-        image.replaceWith(createModelCoverFallback());
+        image.replaceWith(createModelCoverFallback(image.alt));
       });
   });
 
@@ -1073,9 +1074,11 @@ function isProtectedWorkAssetUrl(url) {
   return String(url || "").startsWith("/api/work/models/");
 }
 
-function createModelCoverFallback() {
-  const element = document.createElement("span");
-  element.className = "model-cube";
+function createModelCoverFallback(alt = "模型封面") {
+  const element = document.createElement("img");
+  element.src = DEFAULT_MODEL_COVER_URL;
+  element.alt = alt;
+  element.loading = "lazy";
   return element;
 }
 

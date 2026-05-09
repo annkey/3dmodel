@@ -570,7 +570,7 @@ function getSiteSettingsPayload() {
 
 function renderSiteSettings() {
   const settings = normalizeSiteSettings(apiConfig?.siteSettings || {});
-  siteLogoPreview.src = settings.logoUrl || "/assets/kmax-logo.png";
+  siteLogoPreview.src = settings.logoUrl || "/assets/kmax-logo-transparent.png";
   siteKeywordsInput.value = settings.keywords || "";
   siteDescriptionInput.value = settings.description || "";
   siteLogoFile.value = "";

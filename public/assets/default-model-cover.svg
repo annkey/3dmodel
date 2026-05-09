@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 770 447" role="img" aria-label="默认模型封面">
+  <defs>
+    <linearGradient id="bg" x1="98" y1="20" x2="680" y2="430" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#152b5d"/>
+      <stop offset="0.46" stop-color="#214e83"/>
+      <stop offset="1" stop-color="#2862ad"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(456 198) rotate(90) scale(138 176)">
+      <stop offset="0" stop-color="#67e8f9" stop-opacity="0.72"/>
+      <stop offset="0.48" stop-color="#38bdf8" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="tile" x1="368" y1="151" x2="407" y2="263" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e7fbff"/>
+      <stop offset="0.52" stop-color="#55d8ff"/>
+      <stop offset="1" stop-color="#1087e6"/>
+    </linearGradient>
+    <filter id="shadow" x="250" y="132" width="250" height="160" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#071838" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <rect width="770" height="447" fill="url(#bg)"/>
+  <rect width="770" height="447" fill="url(#glow)"/>
+  <path filter="url(#shadow)" d="M291.7 207.4c-14.9 8.4-14.4 23.3.9 31.2l52.8 27.2c17.3 8.9 38 9.1 55.5.6l43-21c14.5-7.1 15.1-21 .9-28.7l-55.6-30.3c-16.8-9.2-37.2-9.4-54.2-.6l-43.3 21.6Z" fill="url(#tile)"/>
+</svg>

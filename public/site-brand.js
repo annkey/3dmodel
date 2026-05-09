@@ -1,5 +1,5 @@
 export const DEFAULT_SITE_SETTINGS = {
-  logoUrl: "/assets/kmax-logo.png",
+  logoUrl: "/assets/kmax-logo-transparent.png",
   iconUrl: "/assets/kmax-browser-icon.png",
   iconVersion: "fixed",
   title: "模型播放器",
@@ -34,8 +34,9 @@ export async function fetchSiteSettings() {
 }
 
 export function normalizeSiteSettings(settings = {}) {
+  const logoUrl = normalizeSiteLogoUrl(settings.logoUrl);
   return {
-    logoUrl: settings.logoUrl || DEFAULT_SITE_SETTINGS.logoUrl,
+    logoUrl: logoUrl || DEFAULT_SITE_SETTINGS.logoUrl,
     iconUrl: DEFAULT_SITE_SETTINGS.iconUrl,
     iconVersion: DEFAULT_SITE_SETTINGS.iconVersion,
     title: DEFAULT_SITE_SETTINGS.title,
@@ -43,6 +44,13 @@ export function normalizeSiteSettings(settings = {}) {
     keywords: settings.keywords || DEFAULT_SITE_SETTINGS.keywords,
     description: settings.description || DEFAULT_SITE_SETTINGS.description
   };
+}
+
+function normalizeSiteLogoUrl(value) {
+  const text = String(value || "").trim();
+  if (!text || text.startsWith("/assets/site/")) return "";
+  if (text.startsWith("/assets/") || text.startsWith("data:image/")) return text;
+  return "";
 }
 
 function updateDocumentMeta(settings) {

@@ -53,6 +53,8 @@ import {
   upsertGeneratedTaskRecord
 } from "/model-preview-task-list.js";
 
+const DEFAULT_MODEL_COVER_URL = "/assets/default-model-cover.svg";
+
 THREE.Cache.enabled = true;
 void applySiteBranding();
 
@@ -887,8 +889,8 @@ function renderSharedModelLibrary(models) {
 function renderSharedModelCard(model) {
   const title = model.name || model.entryFile || "公开模型";
   const coverHtml = model.coverUrl
-    ? `<img src="${escapeHtml(model.coverUrl)}" alt="${escapeHtml(title)} 封面" loading="lazy" />`
-    : `<span class="shared-model-cube"></span>`;
+    ? `<img src="${escapeHtml(model.coverUrl)}" alt="${escapeHtml(title)} 封面" loading="lazy" onerror="this.onerror=null;this.src='${DEFAULT_MODEL_COVER_URL}'" />`
+    : `<img src="${DEFAULT_MODEL_COVER_URL}" alt="${escapeHtml(title)} 封面" loading="lazy" />`;
   const meta = [
     model.ownerName ? `分享者 ${model.ownerName}` : "",
     model.source === "ai" ? "AI生成" : "本地上传",
@@ -2093,13 +2095,17 @@ async function syncGeneratedTasksFromServer(options = {}) {
         .filter((model) => model.source === "ai" || model.generatedTaskId)
         .map(convertUserModelToGeneratedTask);
 
+      const mergedTasks = [];
       for (const task of aiTasks) {
-        upsertGeneratedTask(task);
+        const mergedTask = mergeGeneratedTaskPromptFromLocal(task);
+        mergedTasks.push(mergedTask);
+        upsertGeneratedTask(mergedTask);
       }
 
       renderGeneratedTaskList();
+      syncActiveGeneratedTaskOverlay(mergedTasks);
       lastGeneratedModelSyncAt = Date.now();
-      return aiTasks;
+      return mergedTasks;
     } catch (error) {
       if (!options.silent) {
         setStatus(error.message || "AI生模列表同步失败");
@@ -2111,6 +2117,68 @@ async function syncGeneratedTasksFromServer(options = {}) {
   })();
 
   return syncingGeneratedModelsPromise;
+}
+
+function mergeGeneratedTaskPromptFromLocal(task) {
+  const localTask = generatedTasks.find((item) => item.id === task.id || item.taskId === task.taskId);
+  const localPrompt = String(localTask?.prompt || "").trim();
+  if (!localPrompt || !isGeneratedFallbackTitle(task.prompt, task.taskId)) {
+    return task;
+  }
+
+  const nextTask = {
+    ...task,
+    prompt: localPrompt,
+    persistedModel: task.persistedModel
+      ? { ...task.persistedModel, name: localPrompt }
+      : task.persistedModel
+  };
+  if (task.persistedModel?.id) {
+    void updateGeneratedModelNameFromPrompt(task.persistedModel.id, localPrompt);
+  }
+  return nextTask;
+}
+
+function isGeneratedFallbackTitle(value, taskId) {
+  const text = String(value || "").trim();
+  const id = String(taskId || "").trim();
+  if (!text || !id) {
+    return false;
+  }
+  return text === id || text === `Hunyuan 3D ${id}` || text === `AI ${id}`;
+}
+
+async function updateGeneratedModelNameFromPrompt(modelId, prompt) {
+  try {
+    await fetchJson(`/api/work/models/${encodeURIComponent(modelId)}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeaders()
+      },
+      body: JSON.stringify({ name: prompt })
+    });
+  } catch (error) {
+    console.warn("Generated model title sync failed", error);
+  }
+}
+
+function syncActiveGeneratedTaskOverlay(tasks) {
+  if (!activeGeneratingTaskId) {
+    return;
+  }
+
+  const activeTask = tasks.find((task) => task.id === activeGeneratingTaskId || task.taskId === activeGeneratingTaskId);
+  if (!activeTask) {
+    return;
+  }
+
+  stopTaskPolling(activeTask.id);
+  activeGeneratingTaskId = activeTask.id;
+  updateTaskProgressOverlay(activeTask);
+  if (activeTask.finalized) {
+    window.setTimeout(() => clearTaskProgressOverlay(activeTask.id), 1200);
+  }
 }
 
 function convertUserModelToGeneratedTask(model) {
@@ -2364,7 +2432,7 @@ async function handleGeneratedTaskUpdate(requestTaskId, provider, task) {
       providerName: task.providerName || currentTask.providerName,
       mode: task.mode || currentTask.mode,
       displayModelVersion: task.displayModelVersion || currentTask.displayModelVersion,
-      prompt: currentTask.prompt || task.input?.prompt || currentTask.id,
+      prompt: currentTask.prompt || task.prompt || task.input?.prompt || task.input?.Prompt || currentTask.id,
       status: "running",
       statusText: task.transition.statusText || task.statusText || "正在进入下一阶段",
       stageText: task.transition.stageText || task.stageText || "处理中",
@@ -2401,7 +2469,7 @@ async function handleGeneratedTaskUpdate(requestTaskId, provider, task) {
     textureQuality: task.textureQuality || currentTask.textureQuality || "",
     geometryQuality: task.geometryQuality || currentTask.geometryQuality || "",
     fileSizeBytes: Number(task.fileSizeBytes || currentTask.fileSizeBytes || 0),
-    prompt: currentTask.prompt || task.input?.prompt || currentTask.id,
+    prompt: currentTask.prompt || task.prompt || task.input?.prompt || task.input?.Prompt || currentTask.id,
     status: task.status,
     statusText: task.statusText || task.status,
     stageText: task.stageText || "",

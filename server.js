@@ -143,7 +143,7 @@ const MIME_TYPES = {
 };
 
 const DEFAULT_SITE_SETTINGS = {
-  logoUrl: "/assets/kmax-logo.png",
+  logoUrl: "/assets/kmax-logo-transparent.png",
   iconUrl: "/assets/kmax-browser-icon.png",
   iconVersion: "fixed",
   title: "模型播放器",
@@ -1387,6 +1387,7 @@ async function handleHunyuanGenerate(res, form, userId = "") {
     hunyuanTaskContexts.set(taskId, {
       provider: "hunyuan",
       mode,
+      prompt: prompt || imageFile?.name || "",
       modelVersion,
       textureQuality,
       geometryQuality,
@@ -2094,6 +2095,11 @@ function normalizeHunyuanTask(task, context, fallbackTaskId) {
   const modelUrls = buildHunyuanModelUrls(rawFiles);
   const renderedImage = findHunyuanPreviewImage(rawFiles) || task.PreviewImageUrl || task.PreviewImage || null;
   const taskId = task.JobId || task.JobID || task.TaskId || task.TaskID || fallbackTaskId;
+  const prompt = getHunyuanPrompt(task, context);
+  const input = task.Input && typeof task.Input === "object" ? { ...task.Input } : {};
+  if (prompt && !input.prompt && !input.Prompt) {
+    input.prompt = prompt;
+  }
   const progress = typeof task.Progress === "number"
     ? (status === "success" ? 100 : task.Progress)
     : status === "success"
@@ -2110,6 +2116,7 @@ function normalizeHunyuanTask(task, context, fallbackTaskId) {
     providerName: "Hunyuan 3D",
     mode: context?.mode || "text",
     taskId,
+    prompt,
     type: context?.queryAction || "hunyuan-to-3d",
     status,
     statusText: task.ErrorMessage || task.FailMessage || getHunyuanStatusText(status),
@@ -2117,7 +2124,7 @@ function normalizeHunyuanTask(task, context, fallbackTaskId) {
     finalized: NORMALIZED_FINAL_STATUSES.has(status),
     stageText: getHunyuanStageText(status),
     displayModelVersion: context?.modelVersion || "",
-    input: task.Input || {},
+    input,
     output: rawFiles,
     renderedImage,
     preferredModelUrl:
@@ -2152,6 +2159,19 @@ function normalizeHunyuanStatus(status) {
     EXPIRED: "expired"
   };
   return map[value] || "unknown";
+}
+
+function getHunyuanPrompt(task, context) {
+  return normalizeText(
+    context?.prompt
+    || task?.Prompt
+    || task?.Input?.Prompt
+    || task?.Input?.prompt
+    || task?.Input?.Text
+    || task?.Input?.text
+    || task?.Request?.Prompt
+    || task?.Request?.prompt
+  );
 }
 
 function getHunyuanStatusText(status) {
@@ -2877,7 +2897,9 @@ async function replaceUserModelCover(userId, model, coverFile) {
   await fsp.writeFile(filePath, buffer);
   try {
     if (MODEL_STORAGE_DRIVER === "oss") {
-      const objectKey = buildUserModelObjectKey(userId, model.id, storedName);
+      const objectKey = buildUserModelObjectKey(userId, model.id, storedName, {
+        createdAt: model.createdAt
+      });
       await putOssObject(objectKey, filePath, file.contentType);
       file.objectKey = objectKey;
       await fsp.rm(filePath, { force: true });
@@ -4000,9 +4022,19 @@ async function persistGeneratedTaskAsUserModel(userId, task) {
 
 async function persistGeneratedTaskAsUserModelNow(userId, task) {
   const taskId = normalizeText(task.taskId || task.id);
+  const promptText = getGeneratedTaskPrompt(task);
   const store = readUserModelIndexFile();
   const existing = store.models.find((model) => model.userId === userId && model.generatedTaskId === taskId);
   if (existing) {
+    if (shouldUpdateGeneratedModelPrompt(existing, promptText, taskId)) {
+      existing.name = promptText;
+      existing.generationParams = {
+        ...(existing.generationParams || {}),
+        prompt: promptText
+      };
+      existing.updatedAt = new Date().toISOString();
+      writeUserModelIndexFile(store);
+    }
     return existing;
   }
 
@@ -4017,7 +4049,6 @@ async function persistGeneratedTaskAsUserModelNow(userId, task) {
   const downloadedObjectKeys = [];
 
   try {
-    const promptText = getGeneratedTaskPrompt(task);
     const modelExt = inferModelExtensionFromTask(task, modelUrl);
     const modelOriginalName = sanitizeUploadFileName(`${promptText || taskId}${modelExt}`);
     const modelStoredName = `${crypto.randomUUID()}-${modelOriginalName}`;
@@ -4063,7 +4094,9 @@ async function persistGeneratedTaskAsUserModelNow(userId, task) {
     if (MODEL_STORAGE_DRIVER === "oss") {
       assertOssConfigured();
       for (const file of files) {
-        const objectKey = buildUserModelObjectKey(userId, modelId, file.storedName);
+        const objectKey = buildUserModelObjectKey(userId, modelId, file.storedName, {
+          createdAt: task.createdAt || task.updatedAt
+        });
         await putOssObject(objectKey, path.join(uploadDir, file.storedName), file.contentType);
         downloadedObjectKeys.push(objectKey);
         file.storageDriver = "oss";
@@ -4124,10 +4157,28 @@ function getGeneratedTaskPrompt(task) {
   return normalizeText(
     task?.prompt
     || task?.input?.prompt
+    || task?.input?.Prompt
     || task?.input?.text_prompt
     || task?.input?.text
     || task?.payload?.prompt
+    || task?.payload?.Prompt
   );
+}
+
+function shouldUpdateGeneratedModelPrompt(model, promptText, taskId) {
+  if (!promptText) {
+    return false;
+  }
+
+  const currentPrompt = normalizeText(model?.generationParams?.prompt);
+  if (currentPrompt === promptText) {
+    return false;
+  }
+
+  const currentName = normalizeText(model?.name);
+  return currentName === taskId
+    || currentName === `Hunyuan 3D ${taskId}`
+    || currentName === `AI ${taskId}`;
 }
 
 function collectRemoteModelUrlsFromTask(task) {
@@ -4483,10 +4534,18 @@ function buildOssAuthorization(method, objectKey, { contentType = "", date = "" 
   return `OSS ${ALIYUN_OSS_ACCESS_KEY_ID}:${signature}`;
 }
 
-function buildUserModelObjectKey(userId, modelId, storedName) {
+function buildUserModelObjectKey(userId, modelId, storedName, options = {}) {
+  const createdAt = options.createdAt ? new Date(options.createdAt) : new Date();
+  const safeDate = Number.isNaN(createdAt.getTime()) ? new Date() : createdAt;
+  const year = String(safeDate.getUTCFullYear());
+  const month = String(safeDate.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(safeDate.getUTCDate()).padStart(2, "0");
+  const date = `${year}${month}${day}`;
   return [
     ALIYUN_OSS_PREFIX,
+    "users",
     sanitizePathSegment(userId),
+    date,
     sanitizePathSegment(modelId),
     sanitizeUploadFileName(storedName)
   ].filter(Boolean).join("/");
@@ -4805,13 +4864,22 @@ function recordGeneratedTask(task, fallback = {}) {
   const existing = generatedTaskRecords.get(taskId) || {};
   const now = new Date().toISOString();
   const provider = normalizeProvider(task?.provider || fallback.provider || existing.provider);
-  const providerName = task?.providerName || fallback.providerName || existing.providerName || (provider === "meshy" ? "Meshy" : "Tripo3D");
+  const providerName = task?.providerName || fallback.providerName || existing.providerName || getProviderDisplayName(provider);
   const mode = normalizeText(task?.mode || fallback.mode || existing.mode || "text");
   const input = task?.input && typeof task.input === "object" ? task.input : {};
   const output = task?.output && typeof task.output === "object" ? task.output : existing.output || null;
   const modelUrls = task?.modelUrls && typeof task.modelUrls === "object" ? task.modelUrls : existing.modelUrls || null;
   const downloadItems = Array.isArray(task?.downloadItems) ? task.downloadItems : buildDownloadItemsFromTask(task, modelUrls);
-  const prompt = normalizeText(fallback.prompt || input.prompt || existing.prompt || task?.payload?.prompt || "");
+  const prompt = normalizeText(
+    task?.prompt
+    || fallback.prompt
+    || input.prompt
+    || input.Prompt
+    || existing.prompt
+    || task?.payload?.prompt
+    || task?.payload?.Prompt
+    || ""
+  );
   const preferredModelUrl = normalizeText(task?.preferredModelUrl || existing.preferredModelUrl || "");
 
   const nextRecord = {
@@ -4840,6 +4908,13 @@ function recordGeneratedTask(task, fallback = {}) {
 
   generatedTaskRecords.set(taskId, nextRecord);
   return nextRecord;
+}
+
+function getProviderDisplayName(provider) {
+  if (provider === "meshy") return "Meshy";
+  if (provider === "tripo") return "Tripo3D";
+  if (provider === "hunyuan") return "Hunyuan 3D";
+  return provider || "AI生成";
 }
 
 function buildDownloadItemsFromTask(task, modelUrls) {
@@ -5121,6 +5196,9 @@ function normalizeSiteSettings(value = {}) {
 function normalizeSiteLogoUrl(value) {
   const text = normalizeText(value);
   if (!text) return "";
+  if (text.startsWith("/assets/site/")) {
+    return "";
+  }
   if (text.startsWith("/assets/") || text.startsWith("data:image/")) {
     return text;
   }
