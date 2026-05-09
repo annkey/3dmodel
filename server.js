@@ -35,6 +35,9 @@ const HUNYUAN_API_BASE = "https://ai3d.tencentcloudapi.com";
 const HUNYUAN_API_VERSION = "2025-05-13";
 const GENERATOR_API_BASE = normalizeApiBase(process.env.GENERATOR_API_BASE || "");
 const MODEL_STORAGE_DRIVER = normalizeStorageDriver(process.env.MODEL_STORAGE_DRIVER || "oss");
+const USER_MODEL_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+const OSS_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
+const OSS_UPLOAD_RETRY_COUNT = 2;
 const ALIYUN_OSS_REGION = process.env.ALIYUN_OSS_REGION || "oss-cn-shenzhen";
 const ALIYUN_OSS_BUCKET = process.env.ALIYUN_OSS_BUCKET || "k3dmodel";
 const ALIYUN_OSS_PREFIX = normalizeObjectPrefix(process.env.ALIYUN_OSS_PREFIX || "models");
@@ -231,6 +234,9 @@ const server = http.createServer(async (req, res) => {
     });
   }
 });
+server.requestTimeout = USER_MODEL_UPLOAD_TIMEOUT_MS;
+server.headersTimeout = USER_MODEL_UPLOAD_TIMEOUT_MS + 60 * 1000;
+server.timeout = USER_MODEL_UPLOAD_TIMEOUT_MS;
 
 startServer().catch((error) => {
   console.error("Server startup failed", error);
@@ -2494,7 +2500,7 @@ async function handleUserModelUpload(req, userId) {
       await fsp.rm(uploadDir, { recursive: true, force: true });
     } catch (error) {
       await fsp.rm(uploadDir, { recursive: true, force: true });
-      throw error;
+      throw normalizeUserModelStorageError(error);
     }
   }
 
@@ -2862,7 +2868,11 @@ async function updateUserModel(userId, modelId, payload) {
   model.name = name;
   const coverFile = payload?.cover;
   if (coverFile && typeof coverFile.arrayBuffer === "function" && Number(coverFile.size || 0) > 0) {
-    await replaceUserModelCover(userId, model, coverFile);
+    try {
+      await replaceUserModelCover(userId, model, coverFile);
+    } catch (error) {
+      throw normalizeUserModelStorageError(error);
+    }
   }
   model.updatedAt = new Date().toISOString();
   writeUserModelIndexFile(store);
@@ -3954,6 +3964,7 @@ function toPublicSharedModel(model) {
   return {
     id: model.id,
     name: model.name,
+    ownerId: model.userId,
     ownerName: owner?.displayName || owner?.username || "",
     source: model.source || "upload",
     sourceText: model.source === "ai" ? "AI生成" : "我的模型",
@@ -4518,14 +4529,12 @@ async function proxyOssObject(req, res, objectKey, file) {
 }
 
 async function putOssObject(objectKey, filePath, contentType) {
-  const stat = await fsp.stat(filePath);
-  const response = await requestOssObject({
+  const response = await requestOssObjectWithRetry({
     method: "PUT",
     objectKey,
     filePath,
-    contentType,
-    contentLength: stat.size
-  });
+    contentType
+  }, OSS_UPLOAD_RETRY_COUNT);
 
   if (response.statusCode < 200 || response.statusCode >= 300) {
     const body = await readIncomingMessageText(response);
@@ -4551,7 +4560,28 @@ async function deleteOssObject(objectKey) {
   drainIncomingMessage(response);
 }
 
-function requestOssObject({ method, objectKey, filePath = "", contentType = "", contentLength = 0, headers = {} }) {
+async function requestOssObjectWithRetry(options, retryCount = 0) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    try {
+      return await requestOssObject(options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retryCount || !isRetriableStorageError(error)) {
+        throw error;
+      }
+      await delay(500 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+async function requestOssObject({ method, objectKey, filePath = "", contentType = "", contentLength = 0, headers = {} }) {
+  if (filePath && !contentLength) {
+    const stat = await fsp.stat(filePath);
+    contentLength = stat.size;
+  }
+
   return new Promise((resolve, reject) => {
     let settled = false;
     const date = new Date().toUTCString();
@@ -4586,7 +4616,7 @@ function requestOssObject({ method, objectKey, filePath = "", contentType = "", 
         reject(error);
       }
     });
-    request.setTimeout(10 * 60 * 1000, () => {
+    request.setTimeout(OSS_REQUEST_TIMEOUT_MS, () => {
       if (!settled) {
         request.destroy(new Error("OSS request timed out."));
       }
@@ -4599,6 +4629,42 @@ function requestOssObject({ method, objectKey, filePath = "", contentType = "", 
       request.end();
     }
   });
+}
+
+function isRetriableStorageError(error) {
+  const code = String(error?.code || "").toUpperCase();
+  const message = String(error?.message || "").toLowerCase();
+  return [
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EPIPE",
+    "ENOTFOUND",
+    "EAI_AGAIN"
+  ].includes(code) || message.includes("socket hang up") || message.includes("timed out");
+}
+
+function normalizeUserModelStorageError(error) {
+  if (error?.code === "OssConfigMissing") {
+    const configError = new Error("服务器文件存储配置未完成，请联系管理员处理。");
+    configError.status = error.status || 500;
+    configError.code = error.code;
+    configError.details = error.message || null;
+    return configError;
+  }
+
+  const storageError = new Error(
+    isRetriableStorageError(error)
+      ? "模型文件已上传到服务器，但保存文件时网络连接中断，请稍后重试。"
+      : "模型文件已上传到服务器，但保存文件失败，请稍后重试。"
+  );
+  storageError.status = error?.status || 502;
+  storageError.code = error?.code || "UserModelStorageFailed";
+  storageError.details = error?.details || error?.message || null;
+  return storageError;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildOssAuthorization(method, objectKey, { contentType = "", date = "" } = {}) {

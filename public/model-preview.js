@@ -266,6 +266,7 @@ const pointerSelectionCoords = new THREE.Vector2();
 let pointerDownScreen = null;
 let suppressNextViewerClick = false;
 let activePointerManipulation = null;
+let coverSaveInProgress = false;
 
 const MODEL_PLAYBACK_TIMEOUT_MS = 120000;
 const AUTH_STORAGE_KEY = "kmax-model-preview-auth";
@@ -563,7 +564,7 @@ async function bootstrap() {
   stereoButton.addEventListener("click", toggleStereoMode);
   interactionModeButton.addEventListener("click", toggleInteractionMode);
   fullscreenButton.addEventListener("click", () => void toggleFullscreen());
-  exportButton.addEventListener("click", exportPng);
+  exportButton.addEventListener("click", () => void handleExportImageAction());
   submodelSelect?.addEventListener("change", () => {
     const selected = submodelSelect.value;
     if (!selected) {
@@ -704,6 +705,7 @@ async function bootstrap() {
   updateExplodeStrengthVisibility();
   updateStereoButton();
   updateFullscreenButton();
+  updateExportButtonState();
   updateTaskProgressOverlay(null);
 
   try {
@@ -940,8 +942,12 @@ async function playSharedModel(modelId) {
   setStatus("正在加载公开分享模型...");
 
   try {
+    const isOwnSharedModel = Boolean(model.ownerId && authSession?.user?.id && model.ownerId === authSession.user.id);
     const loaded = await loadRemoteModel(model.modelUrl, {
       taskId: model.id,
+      workModelId: isOwnSharedModel ? model.id : "",
+      sourceContext: "shared",
+      ownerId: model.ownerId || "",
       name: task.prompt,
       formatHint: model.format || inferFormatFromUrl(model.modelUrl),
       timeoutMs: MODEL_PLAYBACK_TIMEOUT_MS
@@ -2232,6 +2238,7 @@ function loadModelFromUrlParams() {
 
   const task = {
     id: params.get("taskId") || modelUrl,
+    workModelId: params.get("workModelId") || (isSameOriginProtectedModelUrl(modelUrl) ? params.get("taskId") || extractWorkModelIdFromUrl(modelUrl) : ""),
     prompt: params.get("name") || stripExtension(getFileNameFromUrl(modelUrl)) || "AI生成模型",
     providerName: params.get("source") || "AI生成",
     provider: params.get("provider") || "",
@@ -2252,8 +2259,10 @@ async function playRemoteModelFromRecord(record, options = {}) {
   }
 
   const modelUrl = record.preferredModelUrl || record.modelUrl;
+  const workModelId = record.workModelId || (isSameOriginProtectedModelUrl(modelUrl) ? record.id || record.taskId || extractWorkModelIdFromUrl(modelUrl) : "");
   const task = {
     id: record.id || record.taskId || modelUrl,
+    workModelId,
     prompt: record.prompt || record.name || stripExtension(getFileNameFromUrl(modelUrl)) || "模型",
     preferredModelUrl: modelUrl
   };
@@ -2274,6 +2283,7 @@ async function playRemoteModelFromRecord(record, options = {}) {
       formatHint: record.format || inferFormatFromUrl(modelUrl),
       timeoutMs: MODEL_PLAYBACK_TIMEOUT_MS,
       taskId: task.id,
+      workModelId: task.workModelId,
       provider: record.provider || "",
       source: record.providerName || record.source || ""
     });
@@ -2563,6 +2573,7 @@ async function playGeneratedTask(taskId) {
       formatHint: playable.format,
       timeoutMs: MODEL_PLAYBACK_TIMEOUT_MS,
       taskId: task.id,
+      workModelId: task.persistedModel?.id || "",
       assetMetaPromise
     });
 
@@ -2660,6 +2671,7 @@ function applySelectedFiles(files) {
   resourceMap.clear();
   currentObjectSource = "local";
   currentRemoteModelUrl = "";
+  updateExportButtonState();
 
   if (files.length > 0) {
     beginLocalSelectionLoading(files);
@@ -2741,6 +2753,7 @@ async function handleLoadModel() {
       fileSizeBytes: entryFile.size || 0
     });
     endLocalSelectionLoading();
+    updateExportButtonState();
     syncOptimizerFormState();
   } catch (error) {
     if (!isModelLoadRequestCurrent(requestId)) {
@@ -2751,6 +2764,7 @@ async function handleLoadModel() {
     setStatus("模型预览失败");
     modelMeta.textContent = formatPreviewError(error);
     showLocalSelectionError(formatPreviewError(error));
+    updateExportButtonState();
     syncOptimizerFormState();
   } finally {
     loadButton.disabled = false;
@@ -2842,6 +2856,9 @@ async function loadRemoteModel(modelUrl, options = {}) {
     currentRemoteModelUrl = modelUrl;
     currentRemoteModelInfo = {
       id: options.taskId || modelUrl,
+      workModelId: options.workModelId || (options.sourceContext === "shared" ? "" : extractWorkModelIdFromUrl(modelUrl)) || "",
+      sourceContext: options.sourceContext || "",
+      ownerId: options.ownerId || "",
       name: modelLabel,
       modelUrl,
       format: String(formatHint || inferFormatFromUrl(modelUrl) || "").toLowerCase(),
@@ -2860,6 +2877,7 @@ async function loadRemoteModel(modelUrl, options = {}) {
     setStatus("生成模型已载入预览器");
     saveLastRemoteModel(currentRemoteModelInfo);
     updateRemoteModelUrlParams(currentRemoteModelInfo);
+    updateExportButtonState();
     syncOptimizerFormState();
     return true;
   } catch (error) {
@@ -2875,6 +2893,7 @@ async function loadRemoteModel(modelUrl, options = {}) {
     resetStats();
     modelMeta.textContent = formatPreviewError(error);
     setStatus("生成模型加载失败");
+    updateExportButtonState();
     syncOptimizerFormState();
     return false;
   } finally {
@@ -3260,6 +3279,7 @@ function clearCurrentObject() {
     currentModelFileSizeBytes = 0;
     updateExplodeButton();
     updateInteractionModeButton();
+    updateExportButtonState();
     syncOptimizerFormState();
     return;
   }
@@ -3275,6 +3295,7 @@ function clearCurrentObject() {
   resetStereoSceneFit();
   updateExplodeButton();
   updateInteractionModeButton();
+  updateExportButtonState();
   syncOptimizerFormState();
 }
 
@@ -5069,6 +5090,12 @@ function getPenInteractionMode(penKey) {
   return "";
 }
 
+function extractWorkModelIdFromUrl(modelUrl) {
+  const path = getSameOriginProtectedModelPath(modelUrl);
+  const match = path.match(/^\/api\/work\/models\/([^/]+)\/files\//);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
 function beginPenExplodePartGrab(pen, part, mode) {
   if (!part?.object || !lastStylusIntersections.length) {
     return false;
@@ -5375,6 +5402,15 @@ function syncStereoRuntimeParams() {
   }
 }
 
+async function handleExportImageAction() {
+  if (isCurrentWorkModelPreview()) {
+    startExportAndSaveCurrentModelCover();
+    return;
+  }
+
+  exportPng();
+}
+
 function exportPng() {
   if (!currentObject) {
     setStatus("请先加载模型");
@@ -5387,6 +5423,74 @@ function exportPng() {
   link.download = `${stripExtension(modelName.textContent || "model")}-preview.png`;
   link.click();
   setStatus("PNG 已导出");
+}
+
+function startExportAndSaveCurrentModelCover() {
+  if (!currentObject) {
+    setStatus("请先加载模型");
+    return;
+  }
+
+  if (!authSession?.token || !authSession?.user) {
+    pendingAuthAction = startExportAndSaveCurrentModelCover;
+    showLoginFeedback("请先登录后再保存模型封面。", "info");
+    openModal(loginModal);
+    window.setTimeout(() => loginUsernameInput?.focus(), 0);
+    return;
+  }
+
+  const modelId = getCurrentWorkModelId();
+  if (!modelId) {
+    setStatus("当前模型无法保存封面，请从用户中心重新打开模型");
+    return;
+  }
+
+  if (coverSaveInProgress) {
+    setStatus("图片正在保存中，请稍后");
+    return;
+  }
+
+  coverSaveInProgress = true;
+  const modelNameSnapshot = currentRemoteModelInfo?.name || modelName.textContent || "模型";
+  setStatus("封面正在后台保存，不影响继续操作");
+
+  window.setTimeout(() => {
+    void exportAndSaveCurrentModelCover(modelId, modelNameSnapshot);
+  }, 0);
+}
+
+async function exportAndSaveCurrentModelCover(modelId, name) {
+  try {
+    const blob = await captureModelCoverBlob({
+      maxWidth: 640,
+      maxHeight: 640,
+      renderWidth: 640,
+      renderHeight: 640
+    });
+    if (!blob) {
+      setStatus("封面导出失败，请稍后重试");
+      return;
+    }
+
+    const form = new FormData();
+    form.append("name", name);
+    form.append("cover", blob, `${sanitizeDownloadName(name)}-cover.png`);
+
+    const data = await fetchJson(`/api/work/models/${encodeURIComponent(modelId)}`, {
+      method: "PATCH",
+      headers: getAuthHeaders(),
+      body: form
+    });
+    const updatedModel = data.model || null;
+    if (updatedModel) {
+      syncSavedWorkModelCover(updatedModel);
+    }
+    setStatus("封面图已保存");
+  } catch (error) {
+    setStatus(error.message || "封面图保存失败");
+  } finally {
+    coverSaveInProgress = false;
+  }
 }
 
 async function updateGeneratedModelCoverFromPreview(taskId) {
@@ -5424,7 +5528,7 @@ async function updateGeneratedModelCoverFromPreview(taskId) {
   }
 }
 
-function captureModelCoverBlob() {
+function captureModelCoverBlob(options = {}) {
   return new Promise((resolve) => {
     if (!currentObject) {
       resolve(null);
@@ -5432,16 +5536,152 @@ function captureModelCoverBlob() {
     }
 
     const previousBackground = scene.background;
-    const thumbnailCamera = camera.clone();
-    frameThumbnailCamera(thumbnailCamera, currentObject);
-    scene.background = new THREE.Color(0xf4f8fb);
+    const thumbnailCamera = options.useCurrentCamera ? camera : camera.clone();
+    if (!options.useCurrentCamera) {
+      frameThumbnailCamera(thumbnailCamera, currentObject);
+    }
+    if (!options.preserveBackground) {
+      scene.background = new THREE.Color(0xf4f8fb);
+    }
+
+    if (options.renderWidth && options.renderHeight) {
+      const thumbnailRenderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        preserveDrawingBuffer: true
+      });
+      thumbnailRenderer.setPixelRatio(1);
+      thumbnailRenderer.setSize(options.renderWidth, options.renderHeight, false);
+      thumbnailRenderer.outputColorSpace = renderer.outputColorSpace;
+      thumbnailRenderer.shadowMap.enabled = renderer.shadowMap.enabled;
+      thumbnailRenderer.render(scene, thumbnailCamera);
+      thumbnailRenderer.domElement.toBlob((blob) => {
+        thumbnailRenderer.dispose();
+        if (!options.preserveBackground) {
+          scene.background = previousBackground;
+        }
+        renderer.render(scene, isStereoDisplayActive ? stereoCamera : camera);
+        resolve(blob);
+      }, "image/png");
+      return;
+    }
+
     renderer.render(scene, thumbnailCamera);
     renderer.domElement.toBlob((blob) => {
-      scene.background = previousBackground;
+      if (!options.preserveBackground) {
+        scene.background = previousBackground;
+      }
       renderer.render(scene, isStereoDisplayActive ? stereoCamera : camera);
-      resolve(blob);
+      if (!blob || (!options.maxWidth && !options.maxHeight)) {
+        resolve(blob);
+        return;
+      }
+      resizeImageBlob(blob, {
+        maxWidth: options.maxWidth || 1280,
+        maxHeight: options.maxHeight || 1280,
+        type: "image/png"
+      }).then(resolve, () => resolve(blob));
     }, "image/png");
   });
+}
+
+function resizeImageBlob(blob, { maxWidth = 1280, maxHeight = 1280, type = "image/png" } = {}) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(blob);
+    image.onload = () => {
+      try {
+        const scale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+        if (scale >= 1) {
+          URL.revokeObjectURL(url);
+          resolve(blob);
+          return;
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext("2d");
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((resizedBlob) => {
+          URL.revokeObjectURL(url);
+          resolve(resizedBlob || blob);
+        }, type);
+      } catch (error) {
+        URL.revokeObjectURL(url);
+        reject(error);
+      }
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("封面图片处理失败"));
+    };
+    image.src = url;
+  });
+}
+
+function isCurrentWorkModelPreview() {
+  return currentObjectSource === "remote" && canSaveCurrentWorkModelCover();
+}
+
+function getCurrentWorkModelId() {
+  return currentRemoteModelInfo?.workModelId
+    || extractWorkModelIdFromUrl(currentRemoteModelUrl)
+    || findPersistedModelIdForCurrentRemoteModel()
+    || "";
+}
+
+function canSaveCurrentWorkModelCover() {
+  if (!getCurrentWorkModelId()) return false;
+  if (currentRemoteModelInfo?.sourceContext !== "shared") return true;
+  return Boolean(currentRemoteModelInfo.ownerId && authSession?.user?.id && currentRemoteModelInfo.ownerId === authSession.user.id);
+}
+
+function findPersistedModelIdForCurrentRemoteModel() {
+  const currentId = String(currentRemoteModelInfo?.id || "");
+  const currentUrl = String(currentRemoteModelUrl || "");
+  const task = generatedTasks.find((item) => {
+    const model = item.persistedModel || {};
+    return item.id === currentId
+      || item.taskId === currentId
+      || model.id === currentId
+      || model.modelUrl === currentUrl
+      || item.preferredModelUrl === currentUrl;
+  });
+  return task?.persistedModel?.id || "";
+}
+
+function syncSavedWorkModelCover(updatedModel) {
+  if (!updatedModel?.id) return;
+  if (currentRemoteModelInfo) {
+    currentRemoteModelInfo = {
+      ...currentRemoteModelInfo,
+      workModelId: updatedModel.id,
+      name: updatedModel.name || currentRemoteModelInfo.name,
+      coverUrl: updatedModel.coverUrl || currentRemoteModelInfo.coverUrl || "",
+      updatedAt: updatedModel.updatedAt || new Date().toISOString()
+    };
+    saveLastRemoteModel(currentRemoteModelInfo);
+  }
+
+  const matchedTask = generatedTasks.find((item) => item.persistedModel?.id === updatedModel.id);
+  if (matchedTask) {
+    upsertGeneratedTask({
+      ...matchedTask,
+      renderedImage: updatedModel.coverUrl || matchedTask.renderedImage,
+      persistedModel: updatedModel,
+      updatedAt: new Date().toISOString()
+    });
+    renderGeneratedTaskList();
+  }
+}
+
+function updateExportButtonState() {
+  if (!exportButton) return;
+  const label = isCurrentWorkModelPreview() ? "导出并保存" : "导出 PNG";
+  exportButton.dataset.label = label;
+  exportButton.title = label;
+  exportButton.setAttribute("aria-label", label);
 }
 
 function frameThumbnailCamera(targetCamera, object) {
@@ -5514,6 +5754,7 @@ function saveLastRemoteModel(model) {
 
   localStorage.setItem(LAST_REMOTE_MODEL_STORAGE_KEY, JSON.stringify({
     id: model.id || model.modelUrl,
+    workModelId: model.workModelId || "",
     name: model.name || stripExtension(getFileNameFromUrl(model.modelUrl)) || "模型",
     modelUrl: model.modelUrl,
     format: model.format || inferFormatFromUrl(model.modelUrl),
@@ -5529,12 +5770,17 @@ function updateRemoteModelUrlParams(model) {
   }
 
   const params = new URLSearchParams(window.location.search);
-  if (params.get("modelUrl") === model.modelUrl) {
+  if (params.get("modelUrl") === model.modelUrl && (params.get("workModelId") || "") === (model.workModelId || "")) {
     return;
   }
 
   params.set("modelUrl", model.modelUrl);
   params.set("taskId", model.id || model.modelUrl);
+  if (model.workModelId) {
+    params.set("workModelId", model.workModelId);
+  } else {
+    params.delete("workModelId");
+  }
   params.set("name", model.name || stripExtension(getFileNameFromUrl(model.modelUrl)) || "模型");
   params.set("format", model.format || inferFormatFromUrl(model.modelUrl) || "");
   params.set("provider", model.provider || "upload");

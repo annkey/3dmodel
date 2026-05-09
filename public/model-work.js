@@ -369,7 +369,7 @@ async function uploadModelFiles() {
         updateUploadProgress(percent, total ? `正在上传 ${loaded} / ${total}` : `正在上传 ${loaded}`);
       },
       onProcessing: () => {
-        updateUploadProgress(100, "上传完成，服务器正在保存到 OSS");
+        updateUploadProgress(100, "上传完成，服务器正在保存文件");
       }
     });
     uploadedModels = data.models || [];
