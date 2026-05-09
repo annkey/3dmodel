@@ -163,7 +163,11 @@ export function formatStatus(status) {
     SUCCEEDED: "生成成功",
     FAILED: "生成失败",
     CANCELED: "任务已取消",
-    CANCELLED: "任务已取消"
+    CANCELLED: "任务已取消",
+    WAIT: "排队中",
+    RUN: "生成中",
+    DONE: "生成成功",
+    FAIL: "生成失败"
   };
 
   return map[text] || text || "处理中";

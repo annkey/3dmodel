@@ -2088,13 +2088,14 @@ function inferMeshyStageText(type) {
 }
 
 function normalizeHunyuanTask(task, context, fallbackTaskId) {
-  const status = normalizeHunyuanStatus(task.Status || task.JobStatus || task.State);
   const rawFiles = task.ResultFile3Ds || task.ResultFiles || task.Files || [];
+  const hasResultFiles = Array.isArray(rawFiles) && rawFiles.length > 0;
+  const status = hasResultFiles ? "success" : normalizeHunyuanStatus(task.Status || task.JobStatus || task.State);
   const modelUrls = buildHunyuanModelUrls(rawFiles);
   const renderedImage = findHunyuanPreviewImage(rawFiles) || task.PreviewImageUrl || task.PreviewImage || null;
   const taskId = task.JobId || task.JobID || task.TaskId || task.TaskID || fallbackTaskId;
   const progress = typeof task.Progress === "number"
-    ? task.Progress
+    ? (status === "success" ? 100 : task.Progress)
     : status === "success"
       ? 100
       : status === "running"
@@ -2111,10 +2112,10 @@ function normalizeHunyuanTask(task, context, fallbackTaskId) {
     taskId,
     type: context?.queryAction || "hunyuan-to-3d",
     status,
-    statusText: task.ErrorMessage || task.FailMessage || task.Message || task.Status || status,
+    statusText: task.ErrorMessage || task.FailMessage || getHunyuanStatusText(status),
     progress,
     finalized: NORMALIZED_FINAL_STATUSES.has(status),
-    stageText: "Hunyuan 3D 生成任务",
+    stageText: getHunyuanStageText(status),
     displayModelVersion: context?.modelVersion || "",
     input: task.Input || {},
     output: rawFiles,
@@ -2153,6 +2154,26 @@ function normalizeHunyuanStatus(status) {
   return map[value] || "unknown";
 }
 
+function getHunyuanStatusText(status) {
+  const map = {
+    queued: "排队中",
+    running: "生成中",
+    success: "生成成功",
+    failed: "生成失败",
+    cancelled: "任务已取消",
+    expired: "任务已过期",
+    unknown: "状态未知"
+  };
+  return map[status] || "处理中";
+}
+
+function getHunyuanStageText(status) {
+  if (status === "success") return "模型生成完成";
+  if (status === "queued") return "等待生成";
+  if (status === "failed") return "模型生成失败";
+  return "模型生成中";
+}
+
 function buildHunyuanModelUrls(files) {
   const urls = {};
 
@@ -2177,11 +2198,22 @@ function buildHunyuanModelUrls(files) {
 }
 
 function inferHunyuanFileType(file, url) {
-  const explicitType = String(file?.Type || file?.Format || "").trim().toLowerCase();
-  if (explicitType) return explicitType;
+  const explicitType = String(file?.Type || file?.Format || file?.FileType || "").trim().toLowerCase();
+  if (explicitType) {
+    if (explicitType.includes("glb")) return "glb";
+    if (explicitType.includes("gltf")) return "gltf";
+    if (explicitType.includes("fbx")) return "fbx";
+    if (explicitType.includes("obj")) return "obj";
+    if (explicitType.includes("stl")) return "stl";
+    if (explicitType.includes("usdz")) return "usdz";
+    if (explicitType.includes("zip")) return "zip";
+    return explicitType;
+  }
 
   try {
-    const ext = path.extname(new URL(url).pathname).slice(1).toLowerCase();
+    const urlExt = path.extname(new URL(url).pathname).slice(1).toLowerCase();
+    const nameExt = path.extname(file?.Name || file?.FileName || "").slice(1).toLowerCase();
+    const ext = urlExt || nameExt;
     return ext || "model";
   } catch {
     return "model";
@@ -5037,7 +5069,7 @@ async function saveSiteSettingsFromRequest(req, requestUrl) {
   const stored = readGeneratorSettingsFile();
   const currentSite = normalizeSiteSettings(stored.site);
   const logoUrl = logoFile
-    ? `/assets/site/${encodeURIComponent(logoFile.storedName)}`
+    ? await siteLogoFileToDataUri(logoFile)
     : normalizeText(fields.logoUrl || currentSite.logoUrl || DEFAULT_SITE_SETTINGS.logoUrl);
   const nextSite = normalizeSiteSettings({
     logoUrl,
@@ -5061,6 +5093,17 @@ async function saveSiteSettingsFromRequest(req, requestUrl) {
   }
 
   return nextSite;
+}
+
+async function siteLogoFileToDataUri(logoFile) {
+  const filePath = path.join(siteAssetDir, logoFile.storedName);
+  try {
+    const buffer = await fsp.readFile(filePath);
+    const mimeType = logoFile.contentType || inferAssetContentType(path.extname(logoFile.storedName).toLowerCase());
+    return `data:${mimeType};base64,${buffer.toString("base64")}`;
+  } finally {
+    await fsp.rm(filePath, { force: true });
+  }
 }
 
 function normalizeSiteSettings(value = {}) {

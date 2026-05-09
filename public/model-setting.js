@@ -136,6 +136,11 @@ function bindEvents() {
     hideFeedback();
   });
 
+  modelVersionSelect.addEventListener("change", () => {
+    updateRuntimeNote();
+    hideFeedback();
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     await saveSettings();
@@ -451,9 +456,13 @@ function syncModelVersionOptions() {
   const preferredVersion = provider === savedProvider
     ? apiConfig?.generatorSettings?.modelVersion
     : providerConfig?.defaultModelVersion;
+  const allowedValues = new Set(options.map((option) => option.value));
+  const selectedVersion = allowedValues.has(preferredVersion)
+    ? preferredVersion
+    : providerConfig?.defaultModelVersion;
 
   modelVersionSelect.innerHTML = options.map((option) => {
-    const selected = option.value === preferredVersion ? " selected" : "";
+    const selected = option.value === selectedVersion ? " selected" : "";
     return `<option value="${escapeHtml(option.value)}"${selected}>${escapeHtml(option.label || option.value)}</option>`;
   }).join("");
 
@@ -476,7 +485,9 @@ function updateRuntimeNote() {
     return;
   }
 
-  runtimeNote.textContent = `当前将统一使用 ${providerConfig.name} / ${modelVersionSelect.value} 生成模型。保存后，播放器中的新生成任务会按这份公共配置提交。`;
+  const selectedOption = modelVersionSelect.options[modelVersionSelect.selectedIndex];
+  const versionLabel = selectedOption?.textContent || modelVersionSelect.value || providerConfig.defaultModelVersion || "";
+  runtimeNote.textContent = `当前将统一使用 ${providerConfig.name} / ${versionLabel} 生成模型。保存后，播放器中的新生成任务会按这份公共配置提交。`;
 }
 
 async function saveSettings() {
