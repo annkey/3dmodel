@@ -88,6 +88,7 @@ const aiActionPanel = document.getElementById("ai-action-panel");
 const openOnlineModelModalButton = document.getElementById("open-online-model-modal");
 const openGeneratorModalButton = document.getElementById("open-generator-modal");
 const openOptimizerModalButton = document.getElementById("open-optimizer-modal");
+const openExplainerModalButton = document.getElementById("open-explainer-modal");
 const openModelListModalButton = document.getElementById("open-model-list-modal");
 const fileList = document.getElementById("file-list");
 const recentList = document.getElementById("recent-list");
@@ -111,6 +112,7 @@ const metricsCard = document.querySelector(".metrics-card");
 const meshMetric = document.getElementById("mesh-metric");
 const generatorModal = document.getElementById("generator-modal");
 const optimizerModal = document.getElementById("optimizer-modal");
+const explainerModal = document.getElementById("explainer-modal");
 const modelListModal = document.getElementById("model-list-modal");
 const onlineModelModal = document.getElementById("online-model-modal");
 const modelListModalTitle = document.getElementById("model-list-modal-title");
@@ -166,6 +168,14 @@ const optimizerResultFill = document.getElementById("optimizer-result-fill");
 const optimizerResultActions = document.getElementById("optimizer-result-actions");
 const optimizerPlayResultButton = document.getElementById("optimizer-play-result");
 const optimizerDownloadResultButton = document.getElementById("optimizer-download-result");
+const explainerForm = document.getElementById("explainer-form");
+const explainerCurrentModel = document.getElementById("explainer-current-model");
+const explainerStyleSelect = document.getElementById("explainer-style");
+const explainerFocusSelect = document.getElementById("explainer-focus");
+const explainerNoteInput = document.getElementById("explainer-note");
+const explainerFeedback = document.getElementById("explainer-feedback");
+const explainerResult = document.getElementById("explainer-result");
+const explainerSubmitButton = document.getElementById("explainer-submit");
 const modelListItems = document.getElementById("model-list-items");
 const modelListEmpty = document.getElementById("model-list-empty");
 const taskProgressOverlay = document.getElementById("task-progress-overlay");
@@ -267,6 +277,7 @@ let pointerDownScreen = null;
 let suppressNextViewerClick = false;
 let activePointerManipulation = null;
 let coverSaveInProgress = false;
+let explainerRequestInProgress = false;
 
 const MODEL_PLAYBACK_TIMEOUT_MS = 120000;
 const AUTH_STORAGE_KEY = "kmax-model-preview-auth";
@@ -592,6 +603,13 @@ async function bootstrap() {
       openModal(optimizerModal);
     }, "请先登录后再使用 AI 模型优化。");
   });
+  openExplainerModalButton?.addEventListener("click", () => {
+    closeActionMenus();
+    requireLogin(() => {
+      syncExplainerFormState();
+      openModal(explainerModal);
+    }, "请先登录后再使用 AI 模型解说。");
+  });
   openModelListModalButton?.addEventListener("click", () => {
     closeActionMenus();
     requireLogin(() => {
@@ -619,6 +637,10 @@ async function bootstrap() {
   optimizerForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     void handleOptimizerSubmit();
+  });
+  explainerForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void handleExplainerSubmit();
   });
   loginForm?.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -707,6 +729,7 @@ async function bootstrap() {
   updateFullscreenButton();
   updateExportButtonState();
   updateTaskProgressOverlay(null);
+  syncExplainerFormState();
 
   try {
     apiConfig = await fetchJson("/api/config");
@@ -803,6 +826,7 @@ function handleGlobalKeydown(event) {
 
   closeModal(generatorModal);
   closeModal(optimizerModal);
+  closeModal(explainerModal);
   closeModal(modelListModal);
   closeModal(onlineModelModal);
   closeModal(loginModal);
@@ -1096,6 +1120,7 @@ async function handleLogout() {
   pendingAuthAction = null;
   closeModal(generatorModal);
   closeModal(optimizerModal);
+  closeModal(explainerModal);
   closeModal(modelListModal);
   userMenuPanel?.classList.add("hidden");
   setStatus("已退出登录");
@@ -1520,6 +1545,198 @@ function syncOptimizerFormState() {
   }
 
   optimizerSubmitButton.disabled = false;
+}
+
+function syncExplainerFormState() {
+  const ready = Boolean(currentObject);
+  if (explainerCurrentModel) {
+    const label = currentRemoteModelInfo?.name || modelName.textContent || "当前模型";
+    explainerCurrentModel.textContent = ready ? `当前解说对象：${label}` : "当前还没有正在播放的模型，请先加载模型。";
+    explainerCurrentModel.classList.remove("hidden");
+  }
+
+  setExplainerFeedback("");
+  if (explainerSubmitButton) {
+    explainerSubmitButton.disabled = !ready || explainerRequestInProgress;
+  }
+}
+
+async function handleExplainerSubmit() {
+  const authToken = await ensureAuthSession("请先登录后再使用 AI 模型解说。");
+  if (!authToken) {
+    return;
+  }
+
+  if (!currentObject) {
+    setStatus("请先加载模型");
+    syncExplainerFormState();
+    return;
+  }
+
+  if (explainerRequestInProgress) {
+    return;
+  }
+
+  explainerRequestInProgress = true;
+  explainerSubmitButton.disabled = true;
+  explainerSubmitButton.textContent = "识别中...";
+  setExplainerFeedback("正在截取当前视角并分析模型结构...");
+  explainerResult?.classList.add("hidden");
+
+  try {
+    const screenshotDataUrl = await captureModelExplainImageDataUrl();
+    const metadata = buildCurrentModelExplainMetadata();
+    setExplainerFeedback("AI 正在生成模型知识点解说...");
+
+    const data = await fetchJson("/api/model/explain", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeadersForToken(authToken)
+      },
+      body: JSON.stringify({
+        screenshotDataUrl,
+        metadata,
+        style: explainerStyleSelect?.value || "guide",
+        focus: explainerFocusSelect?.value || "auto",
+        note: explainerNoteInput?.value.trim() || ""
+      })
+    });
+
+    renderExplainerResult(data.explanation || null);
+    setExplainerFeedback("");
+    setStatus("AI模型解说已生成");
+  } catch (error) {
+    const message = error.message || "AI模型解说生成失败，请稍后重试。";
+    setExplainerFeedback(message, "error");
+    setStatus(message);
+  } finally {
+    explainerRequestInProgress = false;
+    explainerSubmitButton.disabled = !currentObject;
+    explainerSubmitButton.textContent = "生成解说";
+  }
+}
+
+async function captureModelExplainImageDataUrl() {
+  const blob = await captureModelCoverBlob({
+    useCurrentCamera: true,
+    preserveBackground: true,
+    maxWidth: 960,
+    maxHeight: 960
+  });
+
+  if (!blob) {
+    throw new Error("当前模型截图失败，请调整视角后重试。");
+  }
+
+  return blobToDataUrl(blob);
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("截图读取失败"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function buildCurrentModelExplainMetadata() {
+  const size = getObjectSize(currentObject);
+  const stats = countGeometryStats(currentObject);
+  const meshCount = countMeshes(currentObject);
+  const partCount = countExplodableParts(currentObject);
+  const fileName = currentRemoteModelInfo?.name || modelName.textContent || entryFileSelect.value || "current-model";
+
+  return {
+    name: fileName,
+    source: currentObjectSource,
+    format: currentRemoteModelInfo?.format || getExtension(fileName).toUpperCase() || formatStat?.textContent || "",
+    fileSize: fileSizeStat?.textContent || "",
+    meshCount,
+    partCount,
+    triangleCount: stats.triangles,
+    vertexCount: stats.vertices,
+    animationCount: Number(animationStat?.textContent || 0) || 0,
+    size,
+    prompt: findPromptForCurrentModel(),
+    materialNames: collectModelMaterialNames(currentObject),
+    nodeNames: collectModelNodeNames(currentObject)
+  };
+}
+
+function collectModelMaterialNames(object) {
+  const names = new Set();
+  object?.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const material of materials) {
+      if (material?.name) names.add(material.name);
+      if (material?.map?.name) names.add(material.map.name);
+    }
+  });
+  return Array.from(names).slice(0, 24);
+}
+
+function collectModelNodeNames(object) {
+  const names = new Set();
+  object?.traverse((child) => {
+    if (child.name) names.add(child.name);
+  });
+  return Array.from(names).slice(0, 40);
+}
+
+function findPromptForCurrentModel() {
+  const currentId = currentRemoteModelInfo?.taskId || currentRemoteModelInfo?.id || "";
+  const task = generatedTasks.find((item) => {
+    return currentId && (item.id === currentId || item.taskId === currentId || item.persistedModel?.id === currentRemoteModelInfo?.workModelId);
+  });
+  return task?.prompt || currentRemoteModelInfo?.generationParams?.prompt || "";
+}
+
+function renderExplainerResult(explanation) {
+  if (!explainerResult) return;
+
+  if (!explanation) {
+    explainerResult.innerHTML = `<p>AI 暂时没有返回可展示的解说内容。</p>`;
+    explainerResult.classList.remove("hidden");
+    return;
+  }
+
+  const sections = [
+    ["识别结果", explanation.objectType],
+    ["一句话概览", explanation.summary],
+    ["外观特征", explanation.visualFeatures],
+    ["知识点", explanation.knowledgePoints],
+    ["互动提问", explanation.questions],
+    ["可信度提示", explanation.confidenceNote]
+  ];
+
+  explainerResult.innerHTML = sections
+    .filter(([, value]) => hasExplainerContent(value))
+    .map(([title, value]) => renderExplainerSection(title, value))
+    .join("") || `<p>${escapeHtml(String(explanation.text || "AI 暂时没有返回可展示的解说内容。"))}</p>`;
+  explainerResult.classList.remove("hidden");
+}
+
+function hasExplainerContent(value) {
+  return Array.isArray(value) ? value.length > 0 : Boolean(String(value || "").trim());
+}
+
+function renderExplainerSection(title, value) {
+  if (Array.isArray(value)) {
+    const items = value.map((item) => `<li>${escapeHtml(String(item || ""))}</li>`).join("");
+    return `<section><h3>${escapeHtml(title)}</h3><ul>${items}</ul></section>`;
+  }
+
+  return `<section><h3>${escapeHtml(title)}</h3><p>${escapeHtml(String(value || ""))}</p></section>`;
+}
+
+function setExplainerFeedback(message, tone = "info") {
+  if (!explainerFeedback) return;
+  explainerFeedback.textContent = message || "";
+  explainerFeedback.classList.toggle("hidden", !message);
+  explainerFeedback.classList.toggle("form-note-error", tone === "error");
 }
 
 function syncGeneratorModeFieldState() {
@@ -4373,6 +4590,7 @@ function updateModelStats(fileName, animationCount) {
   modelMeta.textContent = `文件：${fileName} | 子结构：${formatNumber(partCount)} | 三角面：${formatNumber(triangles)}`;
   syncExplodeParts();
   syncPanoramaPresentation();
+  syncExplainerFormState();
 }
 
 function resetStats() {
@@ -4389,6 +4607,7 @@ function resetStats() {
   setText(sizeStat, "-");
   updateExplodeStrengthVisibility();
   panoramaShadow.visible = false;
+  syncExplainerFormState();
 }
 
 function countMeshes(object) {

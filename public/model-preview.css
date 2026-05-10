@@ -902,18 +902,28 @@ body {
   font-size: 13px;
 }
 
+#explainer-modal .modal-card {
+  width: min(680px, calc(100vw - 32px));
+  padding: 18px;
+  border-radius: 16px;
+  font-size: 13px;
+}
+
 #generator-modal .modal-head,
-#optimizer-modal .modal-head {
+#optimizer-modal .modal-head,
+#explainer-modal .modal-head {
   margin-bottom: 12px;
 }
 
 #generator-modal .modal-head h2,
-#optimizer-modal .modal-head h2 {
+#optimizer-modal .modal-head h2,
+#explainer-modal .modal-head h2 {
   font-size: 18px;
 }
 
 #generator-modal .modal-head p,
-#optimizer-modal .modal-head p {
+#optimizer-modal .modal-head p,
+#explainer-modal .modal-head p {
   font-size: 12px;
 }
 
@@ -1341,6 +1351,40 @@ body {
   color: var(--text);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.explainer-result {
+  display: grid;
+  gap: 12px;
+  max-height: min(48vh, 460px);
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 14px;
+  background: rgba(248, 250, 252, 0.94);
+}
+
+.explainer-result section {
+  display: grid;
+  gap: 6px;
+}
+
+.explainer-result h3 {
+  margin: 0;
+  color: var(--accent-dark);
+  font-size: 13px;
+}
+
+.explainer-result p,
+.explainer-result ul {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.explainer-result ul {
+  padding-left: 18px;
 }
 
 .modal-result-card {

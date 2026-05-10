@@ -70,6 +70,7 @@
               <div id="ai-action-panel" class="action-menu-panel hidden">
                 <button id="open-generator-modal" class="action-menu-item" type="button">AI生成模型</button>
                 <button id="open-optimizer-modal" class="action-menu-item" type="button">AI模型优化</button>
+                <button id="open-explainer-modal" class="action-menu-item" type="button">AI模型解说</button>
                 <button id="open-model-list-modal" class="action-menu-item" type="button">AI生模列表</button>
               </div>
             </div>
@@ -319,6 +320,57 @@
               <div class="modal-actions">
                 <button class="secondary-btn" type="button" data-close-modal="optimizer-modal">取消</button>
                 <button id="optimizer-submit" class="primary-btn" type="submit">开始优化当前模型</button>
+              </div>
+            </form>
+          </section>
+        </div>
+
+        <div id="explainer-modal" class="modal-shell hidden" role="dialog" aria-modal="true" aria-labelledby="explainer-modal-title">
+          <div class="modal-backdrop" data-close-modal="explainer-modal"></div>
+          <section class="modal-card explainer-modal-card">
+            <div class="modal-head">
+              <div>
+                <h2 id="explainer-modal-title">AI模型解说</h2>
+                <p>识别当前视角和模型结构，生成可用于教学、展陈或演示的知识点。</p>
+              </div>
+              <button class="modal-close" type="button" data-close-modal="explainer-modal" aria-label="关闭">×</button>
+            </div>
+
+            <form id="explainer-form" class="modal-form">
+              <div id="explainer-current-model" class="form-summary">当前还没有正在播放的模型，请先加载模型。</div>
+
+              <div class="form-grid">
+                <label class="form-field">
+                  <span>解说风格</span>
+                  <select id="explainer-style" name="style">
+                    <option value="guide">展馆讲解</option>
+                    <option value="child">儿童科普</option>
+                    <option value="professional">专业分析</option>
+                  </select>
+                </label>
+
+                <label class="form-field">
+                  <span>关注重点</span>
+                  <select id="explainer-focus" name="focus">
+                    <option value="auto">自动判断</option>
+                    <option value="structure">结构与造型</option>
+                    <option value="material">材质与工艺</option>
+                    <option value="history">背景知识</option>
+                  </select>
+                </label>
+              </div>
+
+              <label class="form-field">
+                <span>补充说明（可选）</span>
+                <textarea id="explainer-note" name="note" rows="3" placeholder="例如：这是用于课堂展示的机械模型，请重点解释关键部件。"></textarea>
+              </label>
+
+              <div id="explainer-feedback" class="form-note hidden" aria-live="polite"></div>
+              <div id="explainer-result" class="explainer-result hidden" aria-live="polite"></div>
+
+              <div class="modal-actions">
+                <button class="secondary-btn" type="button" data-close-modal="explainer-modal">关闭</button>
+                <button id="explainer-submit" class="primary-btn" type="submit">生成解说</button>
               </div>
             </form>
           </section>

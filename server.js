@@ -34,6 +34,10 @@ const HUNYUAN_REGION = process.env.HUNYUAN_REGION || process.env.TENCENTCLOUD_RE
 const HUNYUAN_API_BASE = "https://ai3d.tencentcloudapi.com";
 const HUNYUAN_API_VERSION = "2025-05-13";
 const GENERATOR_API_BASE = normalizeApiBase(process.env.GENERATOR_API_BASE || "");
+const MODEL_EXPLAIN_API_KEY = process.env.MODEL_EXPLAIN_API_KEY || process.env.OPENAI_API_KEY || "";
+const MODEL_EXPLAIN_API_BASE = normalizeApiBase(process.env.MODEL_EXPLAIN_API_BASE || "https://api.openai.com/v1");
+const MODEL_EXPLAIN_MODEL = process.env.MODEL_EXPLAIN_MODEL || "gpt-4o-mini";
+const MODEL_EXPLAIN_PROVIDER_NAME = process.env.MODEL_EXPLAIN_PROVIDER_NAME || "OpenAI-compatible";
 const MODEL_STORAGE_DRIVER = normalizeStorageDriver(process.env.MODEL_STORAGE_DRIVER || "oss");
 const USER_MODEL_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 const OSS_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
@@ -599,6 +603,28 @@ async function handleApi(req, res, requestUrl) {
       sendJson(res, error.status || 500, {
         error: "SharedModelListFailed",
         message: error.message || "Failed to read shared models."
+      });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && requestUrl.pathname === "/api/model/explain") {
+    try {
+      assertAuthenticated(req);
+      const request = toWebRequest(req, requestUrl);
+      const payload = await request.json();
+      const explanation = await createModelExplanation(payload);
+      sendJson(res, 200, {
+        ok: true,
+        providerName: MODEL_EXPLAIN_PROVIDER_NAME,
+        model: MODEL_EXPLAIN_MODEL,
+        explanation
+      });
+    } catch (error) {
+      sendJson(res, error.status || 400, {
+        error: "ModelExplainFailed",
+        message: error.message || "AI模型解说生成失败。",
+        details: error.details || null
       });
     }
     return;
@@ -2487,23 +2513,6 @@ async function handleUserModelUpload(req, userId) {
     throwHttpError(400, "模型封面仅支持 JPG、PNG 或 WebP 图片。");
   }
 
-  if (MODEL_STORAGE_DRIVER === "oss") {
-    try {
-      await uploadUserModelFilesToOss(userId, uploadId, uploaded.files, uploadDir);
-      console.log("User model upload stored in OSS", {
-        userId,
-        uploadId,
-        fileCount: uploaded.files.length,
-        totalBytes: uploaded.totalBytes,
-        elapsedMs: Date.now() - startedAt
-      });
-      await fsp.rm(uploadDir, { recursive: true, force: true });
-    } catch (error) {
-      await fsp.rm(uploadDir, { recursive: true, force: true });
-      throw normalizeUserModelStorageError(error);
-    }
-  }
-
   const now = new Date().toISOString();
   const model = {
     id: uploadId,
@@ -2521,6 +2530,10 @@ async function handleUserModelUpload(req, userId) {
 
   store.models = [model, ...store.models.filter((item) => item.id !== model.id)];
   writeUserModelIndexFile(store);
+  scheduleUserModelOssUpload(userId, uploadId, uploaded.files, uploadDir, {
+    totalBytes: uploaded.totalBytes,
+    startedAt
+  });
 
   return {
     ok: true,
@@ -4448,6 +4461,51 @@ async function uploadUserModelFilesToOss(userId, modelId, files, uploadDir) {
   }
 }
 
+function scheduleUserModelOssUpload(userId, modelId, files, uploadDir, options = {}) {
+  if (MODEL_STORAGE_DRIVER !== "oss") {
+    return;
+  }
+
+  const fileSnapshots = files.map((file) => ({ ...file }));
+  setImmediate(() => {
+    void uploadUserModelFilesToOss(userId, modelId, fileSnapshots, uploadDir)
+      .then(() => {
+        const store = readUserModelIndexFile();
+        const model = store.models.find((item) => item.userId === userId && item.id === modelId);
+        if (!model) {
+          return deleteUserModelFilesFromOss(fileSnapshots).catch(() => {});
+        }
+
+        model.files = model.files.map((file) => {
+          const uploaded = fileSnapshots.find((item) => item.storedName === file.storedName);
+          return uploaded
+            ? { ...file, storageDriver: uploaded.storageDriver, objectKey: uploaded.objectKey }
+            : file;
+        });
+        model.storageDriver = "oss";
+        model.updatedAt = new Date().toISOString();
+        writeUserModelIndexFile(store);
+        return fsp.rm(uploadDir, { recursive: true, force: true });
+      })
+      .then(() => {
+        console.log("User model upload stored in OSS", {
+          userId,
+          uploadId: modelId,
+          fileCount: files.length,
+          totalBytes: options.totalBytes || 0,
+          elapsedMs: Date.now() - Number(options.startedAt || Date.now())
+        });
+      })
+      .catch((error) => {
+        console.error("User model background OSS upload failed", {
+          userId,
+          uploadId: modelId,
+          message: error?.message || String(error)
+        });
+      });
+  });
+}
+
 async function deleteUserModelFilesFromOss(files) {
   if (!Array.isArray(files) || !files.length) return;
   assertOssConfigured();
@@ -5131,6 +5189,184 @@ function getClientIp(req) {
   return forwardedFor || req.socket?.remoteAddress || "";
 }
 
+async function createModelExplanation(payload) {
+  assertModelExplainConfigured();
+  const screenshotDataUrl = normalizeText(payload?.screenshotDataUrl);
+  if (!/^data:image\/(?:png|jpeg|jpg|webp);base64,/i.test(screenshotDataUrl)) {
+    const error = new Error("缺少当前模型截图，无法生成 AI 解说。");
+    error.status = 400;
+    throw error;
+  }
+
+  if (Buffer.byteLength(screenshotDataUrl, "utf8") > 6 * 1024 * 1024) {
+    const error = new Error("模型截图过大，请调整窗口或稍后重试。");
+    error.status = 413;
+    throw error;
+  }
+
+  const metadata = sanitizeModelExplainMetadata(payload?.metadata || {});
+  const style = normalizeModelExplainStyle(payload?.style);
+  const focus = normalizeModelExplainFocus(payload?.focus);
+  const note = normalizeText(payload?.note).slice(0, 800);
+
+  const response = await fetch(`${MODEL_EXPLAIN_API_BASE}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${MODEL_EXPLAIN_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: MODEL_EXPLAIN_MODEL,
+      temperature: 0.35,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: [
+            "你是一个中文 3D 模型知识讲解员。",
+            "请结合截图和元数据识别模型，给出准确但不过度断言的讲解。",
+            "如果无法确定物体类别，要明确说明不确定，并基于可见特征讲解。",
+            "只输出 JSON，不要输出 Markdown。"
+          ].join("\n")
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: buildModelExplainPrompt({ metadata, style, focus, note })
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: screenshotDataUrl,
+                detail: "high"
+              }
+            }
+          ]
+        }
+      ]
+    })
+  });
+
+  const text = await response.text();
+  const data = text ? tryParseJson(text) : {};
+  if (!response.ok) {
+    const error = new Error(extractErrorMessage(data) || "AI模型解说服务请求失败。");
+    error.status = response.status;
+    error.details = data;
+    throw error;
+  }
+
+  const content = data?.choices?.[0]?.message?.content || "";
+  return normalizeModelExplanation(tryParseJson(content));
+}
+
+function assertModelExplainConfigured() {
+  if (!MODEL_EXPLAIN_API_KEY || !MODEL_EXPLAIN_API_BASE || !MODEL_EXPLAIN_MODEL) {
+    const error = new Error("AI模型解说未配置。请在后端环境变量中设置 MODEL_EXPLAIN_API_KEY 或 OPENAI_API_KEY。");
+    error.status = 503;
+    throw error;
+  }
+}
+
+function sanitizeModelExplainMetadata(metadata) {
+  const value = metadata && typeof metadata === "object" ? metadata : {};
+  return {
+    name: normalizeText(value.name).slice(0, 180),
+    source: normalizeText(value.source).slice(0, 40),
+    format: normalizeText(value.format).slice(0, 30),
+    fileSize: normalizeText(value.fileSize).slice(0, 40),
+    meshCount: clampInteger(value.meshCount, 0, 1000000),
+    partCount: clampInteger(value.partCount, 0, 1000000),
+    triangleCount: clampInteger(value.triangleCount, 0, 1000000000),
+    vertexCount: clampInteger(value.vertexCount, 0, 1000000000),
+    animationCount: clampInteger(value.animationCount, 0, 100000),
+    size: value.size && typeof value.size === "object"
+      ? {
+          x: normalizeText(value.size.x).slice(0, 24),
+          y: normalizeText(value.size.y).slice(0, 24),
+          z: normalizeText(value.size.z).slice(0, 24)
+        }
+      : null,
+    prompt: normalizeText(value.prompt).slice(0, 500),
+    materialNames: sanitizeStringList(value.materialNames, 24, 80),
+    nodeNames: sanitizeStringList(value.nodeNames, 40, 80)
+  };
+}
+
+function normalizeModelExplainStyle(value) {
+  const style = normalizeText(value);
+  return ["guide", "child", "professional"].includes(style) ? style : "guide";
+}
+
+function normalizeModelExplainFocus(value) {
+  const focus = normalizeText(value);
+  return ["auto", "structure", "material", "history"].includes(focus) ? focus : "auto";
+}
+
+function buildModelExplainPrompt({ metadata, style, focus, note }) {
+  const styleLabels = {
+    guide: "展馆讲解，清晰、生动、适合公开导览",
+    child: "儿童科普，句子短，避免术语堆叠",
+    professional: "专业分析，强调结构、材质、建模与应用场景"
+  };
+  const focusLabels = {
+    auto: "自动判断最值得讲解的知识点",
+    structure: "重点讲结构与造型",
+    material: "重点讲材质、纹理与工艺",
+    history: "重点讲背景知识、用途或文化语境"
+  };
+
+  return [
+    `解说风格：${styleLabels[style] || styleLabels.guide}`,
+    `关注重点：${focusLabels[focus] || focusLabels.auto}`,
+    note ? `用户补充说明：${note}` : "",
+    "模型元数据：",
+    JSON.stringify(metadata, null, 2),
+    "请返回严格 JSON，字段为：",
+    "{",
+    '  "objectType": "你识别到的模型类别或不确定说明",',
+    '  "summary": "一句话概览",',
+    '  "visualFeatures": ["外观/结构/材质特征1", "特征2", "特征3"],',
+    '  "knowledgePoints": ["知识点1", "知识点2", "知识点3到5"],',
+    '  "questions": ["可以引导观众思考的问题1", "问题2"],',
+    '  "confidenceNote": "说明依据、局限和不确定性"',
+    "}"
+  ].filter(Boolean).join("\n");
+}
+
+function normalizeModelExplanation(value) {
+  const data = value && typeof value === "object" ? value : { text: normalizeText(value) };
+  return {
+    objectType: normalizeText(data.objectType).slice(0, 180),
+    summary: normalizeText(data.summary || data.text || data.raw).slice(0, 500),
+    visualFeatures: sanitizeStringList(data.visualFeatures, 6, 220),
+    knowledgePoints: sanitizeStringList(data.knowledgePoints, 8, 260),
+    questions: sanitizeStringList(data.questions, 4, 180),
+    confidenceNote: normalizeText(data.confidenceNote).slice(0, 500)
+  };
+}
+
+function sanitizeStringList(value, limit, itemLimit) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => normalizeText(item).slice(0, itemLimit))
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function clampInteger(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, Math.round(number)));
+}
+
 function buildLocalGeneratorConfigResponse() {
   const providers = buildProviderConfigMap();
   const generatorSettings = getGeneratorSettings(providers);
@@ -5144,7 +5380,12 @@ function buildLocalGeneratorConfigResponse() {
     generatorSettings,
     siteSettings: getSiteSettings(),
     creditCosts: CREDIT_COSTS,
-    optimization
+    optimization,
+    modelExplain: {
+      enabled: Boolean(MODEL_EXPLAIN_API_KEY && MODEL_EXPLAIN_API_BASE && MODEL_EXPLAIN_MODEL),
+      providerName: MODEL_EXPLAIN_PROVIDER_NAME,
+      model: MODEL_EXPLAIN_MODEL
+    }
   };
 }
 

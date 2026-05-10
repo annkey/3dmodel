@@ -100,6 +100,7 @@ let uploadedModels = [];
 let currentView = "models";
 let pendingModelAction = null;
 const modelCoverObjectUrls = new Map();
+const failedModelCoverUrls = new Set();
 let modelShareField = null;
 let currentUploadController = null;
 let uploadCancelledByUser = false;
@@ -1038,6 +1039,10 @@ function loadProtectedModelCovers() {
   modelList.querySelectorAll("[data-cover-url]").forEach((image) => {
     const url = image.dataset.coverUrl || "";
     if (!url) return;
+    if (failedModelCoverUrls.has(url)) {
+      image.replaceWith(createModelCoverFallback(image.alt));
+      return;
+    }
     visibleUrls.add(url);
     const cachedUrl = modelCoverObjectUrls.get(url);
     if (cachedUrl) {
@@ -1058,6 +1063,7 @@ function loadProtectedModelCovers() {
         });
       })
       .catch(() => {
+        failedModelCoverUrls.add(url);
         image.replaceWith(createModelCoverFallback(image.alt));
       });
   });
