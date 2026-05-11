@@ -255,6 +255,7 @@ let modelLoadRequestId = 0;
 let activePlaybackLoadingTaskId = "";
 let syncingGeneratedModelsPromise = null;
 let lastGeneratedModelSyncAt = 0;
+let generatedModelPersistSyncTimers = new Map();
 let playbackLoadTimeoutId = null;
 let playbackLoadProgressPercent = 0;
 let playbackLoadKnownTotalBytes = 0;
@@ -279,9 +280,12 @@ let activePointerManipulation = null;
 let coverSaveInProgress = false;
 let explainerRequestInProgress = false;
 
-const MODEL_PLAYBACK_TIMEOUT_MS = 120000;
+const MODEL_PLAYBACK_TIMEOUT_MS = 5 * 60 * 1000;
 const AUTH_STORAGE_KEY = "kmax-model-preview-auth";
 const GENERATED_MODEL_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+const GENERATED_MODEL_PERSIST_SYNC_DELAY_MS = 8000;
+const GENERATED_MODEL_PERSIST_SYNC_RETRY_MS = 10000;
+const GENERATED_MODEL_PERSIST_SYNC_MAX_ATTEMPTS = 30;
 const EXPLODE_DISTANCE_SCALE = 0.32;
 const EXPLODE_ANIMATION_SPEED = 8;
 const STYLUS_HELPER_BASE_OFFSET = 0.01;
@@ -2322,7 +2326,10 @@ async function syncGeneratedTasksFromServer(options = {}) {
       for (const task of aiTasks) {
         const mergedTask = mergeGeneratedTaskPromptFromLocal(task);
         mergedTasks.push(mergedTask);
-        upsertGeneratedTask(mergedTask);
+        const savedTask = upsertGeneratedTask(mergedTask);
+        if (savedTask.persistedModel?.modelUrl) {
+          clearGeneratedModelPersistSync(savedTask.id);
+        }
       }
 
       renderGeneratedTaskList();
@@ -2340,6 +2347,48 @@ async function syncGeneratedTasksFromServer(options = {}) {
   })();
 
   return syncingGeneratedModelsPromise;
+}
+
+function scheduleGeneratedModelPersistSync(taskId, attempt = 0) {
+  if (!taskId || !authSession?.token) {
+    return;
+  }
+
+  const currentTask = generatedTasks.find((item) => item.id === taskId || item.taskId === taskId);
+  if (currentTask?.persistedModel?.modelUrl) {
+    clearGeneratedModelPersistSync(taskId);
+    return;
+  }
+
+  if (attempt <= 0 && generatedModelPersistSyncTimers.has(taskId)) {
+    return;
+  }
+
+  const delay = attempt <= 0 ? GENERATED_MODEL_PERSIST_SYNC_DELAY_MS : GENERATED_MODEL_PERSIST_SYNC_RETRY_MS;
+  const timerId = window.setTimeout(async () => {
+    generatedModelPersistSyncTimers.delete(taskId);
+    const syncedTasks = await syncGeneratedTasksFromServer({ silent: true, force: true });
+    const syncedTask = syncedTasks.find((item) => item.id === taskId || item.taskId === taskId)
+      || generatedTasks.find((item) => item.id === taskId || item.taskId === taskId);
+
+    if (syncedTask?.persistedModel?.modelUrl || attempt + 1 >= GENERATED_MODEL_PERSIST_SYNC_MAX_ATTEMPTS) {
+      return;
+    }
+
+    scheduleGeneratedModelPersistSync(taskId, attempt + 1);
+  }, delay);
+
+  generatedModelPersistSyncTimers.set(taskId, timerId);
+}
+
+function clearGeneratedModelPersistSync(taskId) {
+  const timerId = generatedModelPersistSyncTimers.get(taskId);
+  if (!timerId) {
+    return;
+  }
+
+  clearTimeout(timerId);
+  generatedModelPersistSyncTimers.delete(taskId);
 }
 
 function mergeGeneratedTaskPromptFromLocal(task) {
@@ -2723,6 +2772,7 @@ async function handleGeneratedTaskUpdate(requestTaskId, provider, task) {
 
     if (nextTask.status === "success" && nextTask.preferredModelUrl) {
       setStatus("模型生成成功，可直接播放");
+      scheduleGeneratedModelPersistSync(nextTask.id);
       if (
         activeGeneratingTaskId === nextTask.id
         && dismissedTaskProgressId !== nextTask.id
@@ -2878,6 +2928,7 @@ function deleteGeneratedTask(taskId) {
   if (activeGeneratingTaskId === taskId) {
     clearTaskProgressOverlay(taskId);
   }
+  clearGeneratedModelPersistSync(taskId);
   generatedTasks = generatedTasks.filter((item) => item.id !== taskId);
   saveGeneratedTasks();
   renderGeneratedTaskList();

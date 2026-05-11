@@ -51,6 +51,7 @@ export function getDisplayProgress(task) {
 
 export function getPreviewModelUrl(task) {
   return (
+    task?.persistedModel?.modelUrl ||
     task?.preferredModelUrl ||
     task?.modelUrls?.pbrModel ||
     task?.modelUrls?.baseModel ||
@@ -65,6 +66,7 @@ export function getPreviewModelUrl(task) {
 
 export function resolvePlayableModel(task) {
   const candidates = [
+    { url: task?.persistedModel?.modelUrl, format: String(task?.persistedModel?.format || "").toLowerCase() || inferFormatFromUrl(task?.persistedModel?.modelUrl || "") },
     { url: task?.modelUrls?.glb, format: "glb" },
     { url: task?.modelUrls?.model, format: inferFormatFromUrl(task?.modelUrls?.model || "") },
     { url: task?.modelUrls?.pbrModel, format: inferFormatFromUrl(task?.modelUrls?.pbrModel || "") },

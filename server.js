@@ -996,7 +996,7 @@ async function handleApi(req, res, requestUrl) {
           proxied: true
         };
         recordGeneratedTask(responseBody, { provider, taskId });
-        await attachPersistedGeneratedModel(responseBody, session?.user?.id);
+        schedulePersistedGeneratedModel(responseBody, session?.user?.id);
         sendJson(res, 200, responseBody);
         return;
       }
@@ -1226,7 +1226,7 @@ async function handleTripoTaskQuery(res, taskId, userId = "") {
   };
 
   recordGeneratedTask(responseBody, { provider: "tripo", taskId, userId });
-  await attachPersistedGeneratedModel(responseBody, userId);
+  schedulePersistedGeneratedModel(responseBody, userId);
   sendJson(res, 200, responseBody);
 }
 
@@ -1362,7 +1362,7 @@ async function handleMeshyTaskQuery(res, taskId, userId = "") {
   }
 
   recordGeneratedTask(normalized, { provider: "meshy", taskId, userId });
-  await attachPersistedGeneratedModel(normalized, userId);
+  schedulePersistedGeneratedModel(normalized, userId);
   sendJson(res, 200, normalized);
 }
 
@@ -1464,7 +1464,7 @@ async function handleHunyuanTaskQuery(res, taskId, userId = "") {
   const normalized = normalizeHunyuanTask(task, context, taskId);
 
   recordGeneratedTask(normalized, { provider: "hunyuan", taskId, userId });
-  await attachPersistedGeneratedModel(normalized, userId);
+  schedulePersistedGeneratedModel(normalized, userId);
   sendJson(res, 200, normalized);
 }
 
@@ -4112,6 +4112,22 @@ async function attachPersistedGeneratedModel(task, userId) {
   }
 }
 
+function schedulePersistedGeneratedModel(task, userId) {
+  if (!userId || task?.status !== "success" || !task?.preferredModelUrl) {
+    return;
+  }
+
+  void attachPersistedGeneratedModel(task, userId).then(() => {
+    recordGeneratedTask(task, {
+      provider: task.provider,
+      taskId: task.taskId || task.id,
+      userId
+    });
+  }).catch((error) => {
+    console.warn("Generated model background persist failed", error);
+  });
+}
+
 async function persistGeneratedTaskAsUserModel(userId, task) {
   const taskId = normalizeText(task?.taskId || task?.id);
   if (!taskId) return null;
@@ -5105,6 +5121,9 @@ function recordGeneratedTask(task, fallback = {}) {
     finalized: Boolean(task?.finalized ?? existing.finalized ?? false),
     preferredModelUrl,
     renderedImage: normalizeText(task?.renderedImage || existing.renderedImage || ""),
+    fileSizeBytes: Number(task?.fileSizeBytes || existing.fileSizeBytes || 0),
+    persistedModel: task?.persistedModel || existing.persistedModel || null,
+    persistError: task?.persistError || existing.persistError || null,
     modelUrls,
     output,
     downloadItems,
